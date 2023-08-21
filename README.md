@@ -1,4 +1,6 @@
-# $1
+# Information Quality
+
+An NLP transformer model for classifying the quality of natural language as "high" or "low"
 
 ## Installation
 
@@ -17,4 +19,3 @@ make test
 ```bash
 
 ```
-

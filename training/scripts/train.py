@@ -15,13 +15,6 @@ from torch.utils.data import DataLoader
 from infoquality.data import MessagesDataset
 from infoquality.model import Model
 
-# def f1(outputs, targets) -> float:
-#     tp = (outputs.argmax(1) == targets.int()).sum().item()
-#     fp = (outputs.argmax(1) != targets.int()).sum().item()
-#     fn = (outputs.argmax(1) == targets.int()).sum().item()
-#     f1 = 2 * tp / (2 * tp + fp + fn)
-#     return f1
-
 
 def f1_score(
     outputs: torch.Tensor,
@@ -131,6 +124,9 @@ def main(args: Namespace):
         test_df = valid_df[splitrow:, :]
         valid_df = valid_df[:splitrow, :]
         label_map = {"neg": 0, "pos": 1}
+    # -------------------------------------------------------------------
+    # DATASETS: MOVIE GENRES (HUGGINGFACE)
+    # -------------------------------------------------------------------
     else:
         train_df = pl.read_parquet(
             "/Users/mwk/data/movie-genre-prediction/train.parquet"
@@ -234,7 +230,6 @@ def main(args: Namespace):
             for i, (vmessages, vtargets) in enumerate(valid_dataloader):
                 voutputs = model(vmessages)
                 vloss = criterion(voutputs, vtargets.long())
-                voutputs = torch.softmax(voutputs, dim=-1)
                 acc.append(accuracy(voutputs, vtargets))
                 epoch_f1 = f1_score(voutputs, vtargets)
                 f1s.append(epoch_f1)
@@ -273,7 +268,6 @@ def main(args: Namespace):
         for i, (tmessages, ttargets) in enumerate(test_dataloader):
             toutputs = model(tmessages)
             tloss = criterion(toutputs, ttargets.long())
-            toutputs = torch.softmax(toutputs, dim=-1)
             acc.append(accuracy(toutputs, ttargets))
             epoch_f1 = f1_score(toutputs, ttargets)
             f1s.append(epoch_f1)

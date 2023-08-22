@@ -17,5 +17,14 @@ make test
 ## Usage
 
 ```bash
-
+python scripts/train.py \
+    --num-epochs 16 \
+    --gamma 0.7 \
+    --num-steps 36 \
+    --lr 0.0002 \
+    --batch-size 36 \
+    --name imdbsent \
+    --embedding-dim 256
 ```
+
+![](tools/readme/training-screenshot.png)

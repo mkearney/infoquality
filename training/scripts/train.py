@@ -15,13 +15,45 @@ from torch.utils.data import DataLoader
 from infoquality.data import MessagesDataset
 from infoquality.model import Model
 
+# def f1(outputs, targets) -> float:
+#     tp = (outputs.argmax(1) == targets.int()).sum().item()
+#     fp = (outputs.argmax(1) != targets.int()).sum().item()
+#     fn = (outputs.argmax(1) == targets.int()).sum().item()
+#     f1 = 2 * tp / (2 * tp + fp + fn)
+#     return f1
 
-def f1(outputs, targets) -> float:
-    tp = (outputs.argmax(1) == targets.int()).sum().item()
-    fp = (outputs.argmax(1) != targets.int()).sum().item()
-    fn = (outputs.argmax(1) == targets.int()).sum().item()
-    f1 = 2 * tp / (2 * tp + fp + fn)
-    return f1
+
+def f1_score(
+    outputs: torch.Tensor,
+    targets: torch.Tensor,
+) -> float:
+    if outputs.shape[1] <= 2:
+        largest_column = torch.sigmoid(outputs)[:, 1] > 0.5
+    else:
+        largest_column = outputs.argmax(dim=1)
+
+    f1s = []
+    for i in range(outputs.shape[1]):
+        if not any(largest_column == i):
+            continue
+        tp = ((largest_column == i) & (targets.int() == i)).sum().item()
+        fp = ((largest_column == i) & (targets.int() != i)).sum().item()
+        fn = ((largest_column != i) & (targets.int() == i)).sum().item()
+        try:
+            f1 = 2 * tp / (2 * tp + fp + fn)
+            f1s.append(f1)
+        except ZeroDivisionError:
+            continue
+    return sum(f1s) / len(f1s)
+
+
+def accuracy(outputs: torch.Tensor, targets: torch.Tensor) -> float:
+    if outputs.shape[1] <= 2:
+        outputs_class = torch.sigmoid(outputs)[:, 1] > 0.5
+    else:
+        outputs_class = outputs.argmax(dim=1)
+    acc = (outputs_class.int() == targets.int()).sum().item() / outputs.shape[0]
+    return acc
 
 
 def get_hyperparameters_from_args(args: Namespace) -> HyperParameters:
@@ -49,7 +81,10 @@ def get_parser() -> ArgumentParser:
     parser.add_argument("--num-classes", type=int)
     parser.add_argument("--version", type=str)
     parser.add_argument("--name", type=str)
-    parser.add_argument("--output-dir", type=str, default="/Users/mwk/models/imdbsent")
+    parser.add_argument("--theta", type=float, default=1.0)
+    parser.add_argument(
+        "--output-dir", type=str, default="/Users/mwk/models/moviegenre"
+    )
     return parser
 
 
@@ -70,7 +105,7 @@ def main(args: Namespace):
     # -------------------------------------------------------------------
     # DATASETS: IMDB SENTIMENT
     # -------------------------------------------------------------------
-    else:
+    elif False:
         imdb = load_dataset("imdb")
         train_df = pl.DataFrame(
             {
@@ -96,6 +131,17 @@ def main(args: Namespace):
         test_df = valid_df[splitrow:, :]
         valid_df = valid_df[:splitrow, :]
         label_map = {"neg": 0, "pos": 1}
+    else:
+        train_df = pl.read_parquet(
+            "/Users/mwk/data/movie-genre-prediction/train.parquet"
+        )
+        valid_df = pl.read_parquet(
+            "/Users/mwk/data/movie-genre-prediction/valid.parquet"
+        )
+        test_df = pl.read_parquet("/Users/mwk/data/movie-genre-prediction/test.parquet")
+        label_map = {
+            label: idx for idx, label in enumerate(train_df["label"].unique().sort())
+        }
     print("-" * 76)
     print(f"         train nobs:  {train_df.shape[0]:,}")
     print(f"         valid nobs:  {valid_df.shape[0]:,}")
@@ -137,7 +183,7 @@ def main(args: Namespace):
     optimizer = optim.AdamW(model.parameters(), lr=hp.lr)
     lr_scheduler = torch.optim.lr_scheduler.StepLR(
         optimizer,
-        step_size=hp.num_steps,
+        step_size=int(hp.num_steps * args.theta),
         gamma=hp.gamma,
     )
     criterion = nn.CrossEntropyLoss()
@@ -153,7 +199,7 @@ def main(args: Namespace):
     # -------------------------------------------------------------------
     # TRAINING LOOOP
     # -------------------------------------------------------------------
-    best_metric, best_state_dict = 0, model.state_dict()
+    best_metric, best_state_dict = 99, model.state_dict()
     valid_loss, acc, f1s = 0, [], []
     total_loss = 0
     start_time = datetime.now()
@@ -172,7 +218,7 @@ def main(args: Namespace):
         for i, (messages, targets) in enumerate(train_dataloader):
             optimizer.zero_grad()
             outputs = model(messages)
-            loss = criterion(outputs, targets)
+            loss = criterion(outputs, targets.long())
             loss.backward()
             optimizer.step()
             lr_scheduler.step()
@@ -187,15 +233,13 @@ def main(args: Namespace):
             valid_loss, acc, f1s = [], [], []
             for i, (vmessages, vtargets) in enumerate(valid_dataloader):
                 voutputs = model(vmessages)
-                vloss = criterion(voutputs, vtargets)
-                voutputs_class = (torch.sigmoid(voutputs)[:, 1] > 0.5).int()
-                acc.append(
-                    (voutputs_class == vtargets.int()).sum().item() / voutputs.shape[0]
-                )
-                epoch_f1 = f1(voutputs, vtargets)
+                vloss = criterion(voutputs, vtargets.long())
+                voutputs = torch.softmax(voutputs, dim=-1)
+                acc.append(accuracy(voutputs, vtargets))
+                epoch_f1 = f1_score(voutputs, vtargets)
                 f1s.append(epoch_f1)
-                if epoch_f1 > best_metric:
-                    best_metric = epoch_f1
+                if vloss < best_metric:
+                    best_metric = vloss
                     best_state_dict = model.state_dict()
 
                 valid_loss.append(vloss.item() / len(vtargets))
@@ -203,10 +247,10 @@ def main(args: Namespace):
                     break
 
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        tlss = sum(train_loss) / len(train_loss)
-        vacc = sum(acc) / len(acc)
-        vf1 = sum(f1s) / len(f1s)
-        vlss = sum(valid_loss) / len(valid_loss)
+        tlss = sum(train_loss) / (len(train_loss) - 1)
+        vacc = sum(acc) / (len(acc) - 1)
+        vf1 = sum(f1s) / (len(f1s) - 1)
+        vlss = sum(valid_loss) / (len(valid_loss) - 1)
         print(
             f" {now}  {epoch:2d} {lr0:6.5f} {lr1:6.5f}  {tlss:6.4f}  "
             f" {vlss:6.4f}   {vacc:4.4f}   {vf1:4.4f}"
@@ -228,12 +272,10 @@ def main(args: Namespace):
         test_loss, acc, f1s = [], [], []
         for i, (tmessages, ttargets) in enumerate(test_dataloader):
             toutputs = model(tmessages)
-            tloss = criterion(toutputs, ttargets)
-            toutputs_class = (torch.sigmoid(toutputs)[:, 1] > 0.5).int()
-            acc.append(
-                (toutputs_class == ttargets.int()).sum().item() / toutputs.shape[0]
-            )
-            epoch_f1 = f1(toutputs, ttargets)
+            tloss = criterion(toutputs, ttargets.long())
+            toutputs = torch.softmax(toutputs, dim=-1)
+            acc.append(accuracy(toutputs, ttargets))
+            epoch_f1 = f1_score(toutputs, ttargets)
             f1s.append(epoch_f1)
             test_loss.append(tloss.item() / len(ttargets))
             if i == hp.num_steps:
@@ -243,7 +285,7 @@ def main(args: Namespace):
         tf1 = sum(f1s) / len(f1s)
         tlss = sum(test_loss) / len(test_loss)
         print(f"          test_loss:  {tlss:.4f}")
-        print(f"           test_acc:  {tacc:.2f}")
+        print(f"           test_acc:  {tacc:.4f}")
         print(f"            test_f1:  {tf1:.4f}")
 
     # -------------------------------------------------------------------

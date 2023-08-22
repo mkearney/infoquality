@@ -5,14 +5,15 @@ import polars as pl
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader
-
+from datasets import load_dataset
 from infoquality.artifacts import bert_embeddings
-from infoquality.data import MessagesDataset
 from infoquality.hyperparameters import HyperParameters
-from infoquality.model import Model
 from infoquality.preprocessor import Preprocessor
 from infoquality.save import ModelSaver
+from torch.utils.data import DataLoader
+
+from infoquality.data import MessagesDataset
+from infoquality.model import Model
 
 
 def f1(outputs, targets) -> float:
@@ -48,7 +49,7 @@ def get_parser() -> ArgumentParser:
     parser.add_argument("--num-classes", type=int)
     parser.add_argument("--version", type=str)
     parser.add_argument("--name", type=str)
-    parser.add_argument("--output-dir", type=str, default="/Users/mwk/models/iqmodel")
+    parser.add_argument("--output-dir", type=str, default="/Users/mwk/models/imdbsent")
     return parser
 
 
@@ -63,10 +64,39 @@ def main(args: Namespace):
     # -------------------------------------------------------------------
     # GET DATASETS
     # -------------------------------------------------------------------
-    train_df = pl.read_parquet("/Users/mwk/data/info-quality-train.parquet")
-    valid_df = pl.read_parquet("/Users/mwk/data/info-quality-valid.parquet")
-    test_df = pl.read_parquet("/Users/mwk/data/info-quality-test.parquet")
-    label_map = {"low": 0, "high": 1}
+    if False:
+        train_df = pl.read_parquet("/Users/mwk/data/info-quality-train.parquet")
+        valid_df = pl.read_parquet("/Users/mwk/data/info-quality-valid.parquet")
+        test_df = pl.read_parquet("/Users/mwk/data/info-quality-test.parquet")
+        label_map = {"low": 0, "high": 1}
+    else:
+        imdb = load_dataset("imdb")
+        train_df = pl.DataFrame(
+            {
+                "text": imdb["train"]["text"],  # type: ignore
+                "label": [
+                    {0: "neg", 1: "pos"}[i]
+                    for i in imdb["train"]["label"]  # type: ignore
+                ],
+            }
+        )
+        valid_df = pl.DataFrame(
+            {
+                "text": imdb["test"]["text"],  # type: ignore
+                "label": [
+                    {0: "neg", 1: "pos"}[i]
+                    for i in imdb["test"]["label"]  # type: ignore
+                ],
+            }
+        )
+        valid_df = valid_df.sample(fraction=1, shuffle=True)
+        valid_df = valid_df.filter(pl.col("text").str.strip().apply(len) > 0)
+        splitrow = int(valid_df.shape[0] * 0.5)
+        test_df = valid_df[splitrow:, :]
+        valid_df = valid_df[:splitrow, :]
+        label_map = {"neg": 0, "pos": 1}
+    print(f"Size of train: {train_df.shape[0]:,}")
+    print(f"Size of valid: {valid_df.shape[0]:,}")
     train_data = MessagesDataset(
         messages=train_df["text"].to_list(),
         labels=train_df["label"].to_list(),
@@ -77,11 +107,11 @@ def main(args: Namespace):
         labels=valid_df["label"].to_list(),
         label_map=label_map,
     )
-    # test_data = MessagesDataset(
-    #     messages=test_df["text"].to_list(),
-    #     labels=test_df["label"].to_list(),
-    #     label_map=label_map,
-    # )
+    test_data = MessagesDataset(
+        messages=test_df["text"].to_list(),
+        labels=test_df["label"].to_list(),
+        label_map=label_map,
+    )
 
     # -------------------------------------------------------------------
     # HYPERPARAMETERS & MODEL COMPONENTS
@@ -103,6 +133,7 @@ def main(args: Namespace):
     criterion = nn.CrossEntropyLoss()
     train_dataloader = DataLoader(train_data, batch_size=hp.batch_size, shuffle=True)
     valid_dataloader = DataLoader(valid_data, batch_size=hp.batch_size, shuffle=True)
+    test_dataloader = DataLoader(test_data, batch_size=hp.batch_size, shuffle=True)
 
     # -------------------------------------------------------------------
     # SAVER
@@ -149,9 +180,9 @@ def main(args: Namespace):
             for i, (vmessages, vtargets) in enumerate(valid_dataloader):
                 voutputs = model(vmessages)
                 vloss = criterion(voutputs, vtargets)
+                voutputs_class = (torch.sigmoid(voutputs)[:, 1] > 0.5).int()
                 acc.append(
-                    ((voutputs.argmax(1)).int() == vtargets.int()).sum().item()
-                    / voutputs.shape[0]
+                    (voutputs_class == vtargets.int()).sum().item() / voutputs.shape[0]
                 )
                 epoch_f1 = f1(voutputs, vtargets)
                 f1s.append(epoch_f1)
@@ -175,6 +206,9 @@ def main(args: Namespace):
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             print(f"{now}")
 
+    # -------------------------------------------------------------------
+    # SAVE MODEL
+    # -------------------------------------------------------------------
     model.load_state_dict(best_state_dict)
     model.eval()
     metrics = {
@@ -192,29 +226,27 @@ def main(args: Namespace):
     hyperparameters_path = saver.save_hyperparameters(model)
     print(f"Model hyperparameters saved as {hyperparameters_path}")
 
-    test_high = test_df.filter(pl.col("label") == "high")["text"].head(200).to_list()
-    test_low = test_df.filter(pl.col("label") == "low")["text"].head(200).to_list()
-
-    # revlabelmap = {v: k for k, v in label_map.items()}
-    pl.Config.set_fmt_str_lengths(140)
-    pl.Config.set_tbl_rows(40)
-
-    pred_est = torch.sigmoid(model(test_high + test_low))[:, 1].tolist()
-    pred_class = ["high" if i > 0.5 else "low" for i in pred_est]
-
-    df = pl.DataFrame(
-        {
-            "text": test_high + test_low,
-            "pred": pred_est,
-            "class": pred_class,
-            "label": ["high"] * len(test_high) + ["low"] * len(test_low),
-        }
-    ).sort("pred")
-
-    test_acc = (
-        df.with_columns(y=pl.col("label") == pl.col("class"))["y"].sum() / df.shape[0]
-    )
+    # -------------------------------------------------------------------
+    # TEST
+    # -------------------------------------------------------------------
+    with torch.no_grad():
+        test_loss, acc, f1s = 0, [], []
+        for i, (tmessages, ttargets) in enumerate(test_dataloader):
+            toutputs = model(tmessages)
+            tloss = criterion(toutputs, ttargets)
+            toutputs_class = (torch.sigmoid(toutputs)[:, 1] > 0.5).int()
+            acc.append(
+                (toutputs_class == ttargets.int()).sum().item() / toutputs.shape[0]
+            )
+            epoch_f1 = f1(toutputs, ttargets)
+            f1s.append(epoch_f1)
+            test_loss += tloss.item() / len(ttargets)
+            if i == hp.num_steps:
+                break
+    test_acc = sum(acc) / len(acc)
+    test_f1 = sum(f1s) / len(f1s)
     print(f"Test accuracy: {test_acc*100:.2f}%")
+    print(f"Test F1: {test_f1*100:.2f}%")
 
 
 if __name__ == "__main__":

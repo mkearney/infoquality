@@ -27,4 +27,10 @@ python scripts/train.py \
     --embedding-dim 256
 ```
 
+## Training
+
 ![](tools/readme/training-screenshot.png)
+
+## Testing
+
+![](tools/readme/pytest-screenshot.png)

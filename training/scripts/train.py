@@ -1,6 +1,6 @@
 from argparse import ArgumentParser, Namespace
 from datetime import datetime
-from typing import List
+from typing import Dict, List
 
 import polars as pl
 import torch
@@ -11,6 +11,8 @@ from infoquality.artifacts import bert_embeddings
 from infoquality.hyperparameters import HyperParameters
 from infoquality.preprocessor import Preprocessor
 from infoquality.save import ModelSaver
+from infoquality.utils import get_logger
+from pydantic import BaseModel
 from torch.utils.data import DataLoader
 
 from infoquality.data import MessagesDataset
@@ -20,7 +22,7 @@ from infoquality.model import Model
 def batch_messages(messages: List[str], batch_size: int) -> List[List[str]]:
     batches = []
     for i in range(0, len(messages), batch_size):
-        batches.append(messages[i : i + batch_size]) # noqa
+        batches.append(messages[i : i + batch_size])  # noqa
     return batches
 
 
@@ -55,6 +57,37 @@ def accuracy(outputs: torch.Tensor, targets: torch.Tensor) -> float:
         outputs_class = outputs.argmax(dim=1)
     acc = (outputs_class.int() == targets.int()).sum().item() / outputs.shape[0]
     return acc
+
+
+class EpochMetrics(BaseModel):
+    epoch: int
+    loss: float
+    val_loss: float
+    val_acc: float
+    val_f1: float
+
+
+class Metrics:
+    metrics: List[EpochMetrics] = []
+
+    def epoch(self) -> List[int]:
+        return [m.epoch for m in self.metrics]
+
+    def loss(self) -> List[float]:
+        return [m.loss for m in self.metrics]
+
+    def val_loss(self) -> List[float]:
+        return [m.val_loss for m in self.metrics]
+
+    def val_acc(self) -> List[float]:
+        return [m.val_acc for m in self.metrics]
+
+    def val_f1(self) -> List[float]:
+        return [m.val_f1 for m in self.metrics]
+
+    def append(self, epoch: int, metrics: Dict[str, float]) -> None:
+        epoch_metrics = EpochMetrics(epoch=epoch, **metrics)
+        self.metrics.append(epoch_metrics)
 
 
 def get_hyperparameters_from_args(args: Namespace) -> HyperParameters:
@@ -95,6 +128,8 @@ def parse_args() -> Namespace:
 
 
 def main(args: Namespace):
+    logger = get_logger(args.version, args.name)
+    logger.info("__start__")
     # -------------------------------------------------------------------
     # DATASETS: INFO QUALLITY
     # -------------------------------------------------------------------
@@ -129,8 +164,8 @@ def main(args: Namespace):
         valid_df = valid_df.sample(fraction=1, shuffle=True)
         valid_df = valid_df.filter(pl.col("text").str.strip().apply(len) > 0)
         splitrow = int(valid_df.shape[0] * 0.5)
-        test_df = valid_df[splitrow:, :]
-        valid_df = valid_df[:splitrow, :]
+        test_df = valid_df[splitrow:, :]  # noqa
+        valid_df = valid_df[:splitrow, :]  # noqa
         label_map = {"neg": 0, "pos": 1}
     # -------------------------------------------------------------------
     # DATASETS: MOVIE GENRES (HUGGINGFACE)
@@ -147,10 +182,13 @@ def main(args: Namespace):
         label_map = {
             label: idx for idx, label in enumerate(train_df["label"].unique().sort())
         }
-    print("-" * 76)
-    print(f"         train nobs:  {train_df.shape[0]:,}")
-    print(f"         valid nobs:  {valid_df.shape[0]:,}")
-    print(f"          test nobs:  {test_df.shape[0]:,}")
+
+    logger.info(
+        "__nobs__",
+        train=train_df.shape[0],
+        valid=valid_df.shape[0],
+        test=test_df.shape[0],
+    )
     train_data = MessagesDataset(
         messages=train_df["text"].to_list(),
         labels=train_df["label"].to_list(),
@@ -170,10 +208,9 @@ def main(args: Namespace):
     # -------------------------------------------------------------------
     # HYPERPARAMETERS
     # -------------------------------------------------------------------
-    print("-" * 76)
     hp = get_hyperparameters_from_args(args)
     for k, v in hp.__dict__.items():
-        print(f" {k:>18}:  {v}")
+        logger.info("__hp__", **{k: v})
 
     # -------------------------------------------------------------------
     # HYPERPARAMETERS & MODEL COMPONENTS
@@ -188,7 +225,7 @@ def main(args: Namespace):
     optimizer = optim.AdamW(model.parameters(), lr=hp.lr)
     lr_scheduler = torch.optim.lr_scheduler.StepLR(
         optimizer,
-        step_size=int(hp.num_steps * args.theta),
+        step_size=args.theta,
         gamma=hp.gamma,
     )
     criterion = nn.CrossEntropyLoss()
@@ -205,70 +242,99 @@ def main(args: Namespace):
     # TRAINING LOOOP
     # -------------------------------------------------------------------
     best_metric, best_state_dict = 99, model.state_dict()
-    valid_loss, acc, f1s = 0, [], []
-    total_loss = 0
+    best_epoch = 0
     start_time = datetime.now()
+    metrics = Metrics()
+
     for epoch in range(hp.num_epochs):
-        if epoch == 0:
-            print("-" * 76)
-            print(
-                f" {'time':>19}  {'ep':>2} {'lr0e1':>7} {'lr1e1':>7}  {'loss':>6}  "
-                f" {'val':>6}   {'acc':>6}   {'f1':>6}"
-            )
-            print("-" * 76)
-        train_loss = []
+        trn_epoch_loss, val_epoch_loss = [], []
+        val_epoch_acc, val_epoch_f1 = [], []
+        epoch_lr = optimizer.param_groups[0]["lr"]
+
+        # --------------------------------------------------------------
+        # training steps
+        # --------------------------------------------------------------
         model.train()
-        lr0 = optimizer.param_groups[0]["lr"]
-        lr1 = lr0
+
         for i, (messages, targets) in enumerate(train_dataloader):
             optimizer.zero_grad()
             outputs = model(messages)
             loss = criterion(outputs, targets.long())
             loss.backward()
             optimizer.step()
-            lr_scheduler.step()
-            lr1 = optimizer.param_groups[0]["lr"]
-            train_loss.append(loss.item() / len(targets))
+            trn_epoch_loss.append(loss.mean().item())
             if i == hp.num_steps:
                 break
 
-        # Validation
+        # --------------------------------------------------------------
+        # validation steps
+        # --------------------------------------------------------------
         model.eval()
         with torch.no_grad():
-            valid_loss, acc, f1s = [], [], []
             for i, (vmessages, vtargets) in enumerate(valid_dataloader):
                 voutputs = model(vmessages)
                 vloss = criterion(voutputs, vtargets.long())
-                acc.append(accuracy(voutputs, vtargets))
-                epoch_f1 = f1_score(voutputs, vtargets)
-                f1s.append(epoch_f1)
-                if vloss < best_metric:
-                    best_metric = vloss
-                    best_state_dict = model.state_dict()
-
-                valid_loss.append(vloss.item() / len(vtargets))
+                # get batch mean of each metric
+                val_epoch_loss.append(vloss.mean().item())
+                val_epoch_acc.append(accuracy(voutputs, vtargets))
+                val_epoch_f1.append(f1_score(voutputs, vtargets))
                 if i == hp.num_steps:
                     break
 
+        # --------------------------------------------------------------
+        # aggregate metrics
+        # --------------------------------------------------------------
+        trn_epoch_loss_stat = sum(trn_epoch_loss) / len(trn_epoch_loss)
+        val_epoch_loss_stat = sum(val_epoch_loss) / len(val_epoch_loss)
+        val_epoch_acc_stat = sum(val_epoch_acc) / len(val_epoch_acc)
+        val_epoch_f1_stat = sum(val_epoch_f1) / len(val_epoch_f1)
+        epoch_metrics = {
+            "loss": trn_epoch_loss_stat,
+            "val_loss": val_epoch_loss_stat,
+            "val_acc": val_epoch_acc_stat,
+            "val_f1": val_epoch_f1_stat,
+        }
+        # just to make it appear in a better order and nicer format
+        epoch_metrics_logging = {
+            "_loss": trn_epoch_loss_stat,
+            "_val_loss": val_epoch_loss_stat,
+            "val_acc": val_epoch_acc_stat,
+            "val_f1": val_epoch_f1_stat,
+        }
+        epoch_metrics_logging = {
+            k: f"{v:.4f}" for k, v in epoch_metrics_logging.items()
+        }
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        tlss = sum(train_loss) / (len(train_loss) - 1)
-        vacc = sum(acc) / (len(acc) - 1)
-        vf1 = sum(f1s) / (len(f1s) - 1)
-        vlss = sum(valid_loss) / (len(valid_loss) - 1)
-        print(
-            f" {now}  {epoch:2d} {lr0:6.5f} {lr1:6.5f}  {tlss:6.4f}  "
-            f" {vlss:6.4f}   {vacc:4.4f}   {vf1:4.4f}"
+        logger.info(
+            now, __ep=f"{epoch:3d}", __lr=f"{epoch_lr:.5f}", **epoch_metrics_logging
         )
+        metrics.append(epoch=epoch, metrics=epoch_metrics)
+
+        # --------------------------------------------------------------
+        # track best epoch
+        # --------------------------------------------------------------
+        if val_epoch_loss_stat < best_metric:
+            best_metric = val_epoch_loss_stat
+            best_epoch = epoch
+            best_state_dict = model.state_dict()
+
         if epoch == hp.num_epochs - 1:
-            print("-" * 76)
             end_time = datetime.now()
             duration = end_time - start_time
             if duration.total_seconds() <= 120:
-                print(f"     train_duration:  {duration.total_seconds():,.2f} seconds")
+                logger.info("duration", seconds=f"{duration.total_seconds():,.2f}")
             else:
-                print(
-                    f"     train_duration:  {duration.total_seconds()/60:,.2f} minutes"
-                )
+                logger.info("duration", minutes=f"{duration.total_seconds()/60:,.2f}")
+            logger.info(
+                "best_metric",
+                epoch=best_epoch,
+                metric="loss",
+                value=f"{best_metric:.4f}",
+            )
+        else:
+            # if this isn't the last epoch, then update lr
+            lr_scheduler.step()
+
     # -------------------------------------------------------------------
     # TEST
     # -------------------------------------------------------------------
@@ -283,13 +349,10 @@ def main(args: Namespace):
             test_loss.append(tloss.item() / len(ttargets))
             if i == hp.num_steps:
                 break
-        print("-" * 76)
         tacc = sum(acc) / len(acc)
         tf1 = sum(f1s) / len(f1s)
         tlss = sum(test_loss) / len(test_loss)
-        print(f"          test_loss:  {tlss:.4f}")
-        print(f"           test_acc:  {tacc:.4f}")
-        print(f"            test_f1:  {tf1:.4f}")
+        logger.info("test", loss=f"{tlss:.4f}", acc=f"{tacc:.4f}", f1=f"{tf1:.4f}")
 
     submission = pl.read_parquet(
         "/Users/mwk/data/movie-genre-prediction/submission-unlabeled.parquet"
@@ -303,31 +366,24 @@ def main(args: Namespace):
     ids = pl.read_parquet(
         "/Users/mwk/data/movie-genre-prediction/submission-ids.parquet"
     )
-    ids.with_columns(genre=labels).write_parquet(
-        "/Users/mwk/data/movie-genre-prediction/submission-labeled.parquet"
+    filename = datetime.now().strftime("submission-labeled-%Y%m%d%H%M%S.csv")
+    ids.with_columns(genre=labels).write_csv(
+        f"/Users/mwk/data/movie-genre-prediction/{filename}"
     )
 
     # -------------------------------------------------------------------
     # SAVE MODEL
     # -------------------------------------------------------------------
-    print("-" * 76)
     model.load_state_dict(best_state_dict)
     model.eval()
-    metrics = {
-        "loss": total_loss,
-        "f1": f1s,
-        "acc": acc,
-        "val": valid_loss,
-    }
-    metrics_path = saver.save_metrics(metrics)
-    print(f"            metrics:  {metrics_path}")
+    metrics_path = saver.save_metrics(metrics.__dict__)
     embeddings_path = saver.save_embeddings(model)
-    print(f"         embeddings:  {embeddings_path}")
     state_dict_path = saver.save_state_dict(model)
-    print(f"         state_dict:  {state_dict_path}")
     hyperparameters_path = saver.save_hyperparameters(model)
-    print(f"    hyperparameters:  {hyperparameters_path}")
-    print("-" * 76)
+    logger.info("__save__", metrics=metrics_path)
+    logger.info("__save__", embeddings=embeddings_path)
+    logger.info("__save__", state_dict=state_dict_path)
+    logger.info("__save__", hyperparameters=hyperparameters_path)
 
 
 if __name__ == "__main__":

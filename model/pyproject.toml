@@ -11,6 +11,7 @@ python = "^3.9"
 pydantic = "^2.2.0"
 torch = "^2.0.1"
 transformers = "^4.31.0"
+structlog = "^23.1.0"
 
 
 [build-system]

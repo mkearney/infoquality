@@ -1,3 +1,4 @@
+import math
 from datetime import datetime
 from typing import Dict, List, Optional
 
@@ -16,7 +17,7 @@ class PositionalEncoding(nn.Module):
         positions_list = torch.arange(0, max_len, dtype=torch.float).view(-1, 1)
         # (dim_model / 2)
         division_term = torch.exp(
-            torch.arange(0, dim_model, 2).float() * -9.210340371976184 / dim_model
+            torch.arange(0, dim_model, 2).float() * (-math.log(10000.0)) / dim_model
         )
         # (max_len, dim_model / 2) – columns 0, 2, 4...
         pos_encoding[:, 0::2] = torch.sin(positions_list * division_term)
@@ -95,5 +96,4 @@ class Model(nn.Module):
         masked = self.pos_encoder(embedded)
         output = self.transformer(embedded, masked)
         output = self.fc(output)
-        return output.sum(dim=2)
-        # return output.mean(dim=1)
+        return output.max(dim=1)[0]

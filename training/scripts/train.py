@@ -30,10 +30,7 @@ def f1_score(
     outputs: torch.Tensor,
     targets: torch.Tensor,
 ) -> float:
-    if outputs.shape[1] <= 2:
-        largest_column = torch.sigmoid(outputs)[:, 1] > 0.5
-    else:
-        largest_column = outputs.argmax(dim=1)
+    largest_column = outputs.argmax(dim=1)
 
     f1s = []
     for i in range(outputs.shape[1]):
@@ -51,10 +48,7 @@ def f1_score(
 
 
 def accuracy(outputs: torch.Tensor, targets: torch.Tensor) -> float:
-    if outputs.shape[1] <= 2:
-        outputs_class = torch.sigmoid(outputs)[:, 1] > 0.5
-    else:
-        outputs_class = outputs.argmax(dim=1)
+    outputs_class = outputs.argmax(dim=1)
     acc = (outputs_class.int() == targets.int()).sum().item() / outputs.shape[0]
     return acc
 
@@ -242,7 +236,7 @@ def main(args: Namespace):
     # -------------------------------------------------------------------
     # TRAINING LOOOP
     # -------------------------------------------------------------------
-    best_metric, best_state_dict = 99, model.state_dict()
+    best_metric, best_state_dict = -99, model.state_dict()
     best_epoch = 0
     start_time = datetime.now()
     metrics = Metrics()
@@ -262,6 +256,7 @@ def main(args: Namespace):
             outputs = model(messages)
             loss = criterion(outputs, targets.long())
             loss.backward()
+            nn.utils.clip_grad.clip_grad_value_(model.parameters(), 3.0)
             optimizer.step()
             trn_epoch_loss.append(loss.mean().item())
             if i == hp.num_steps:
@@ -314,8 +309,8 @@ def main(args: Namespace):
         # --------------------------------------------------------------
         # track best epoch
         # --------------------------------------------------------------
-        if val_epoch_loss_stat < best_metric:
-            best_metric = val_epoch_loss_stat
+        if (val_epoch_acc_stat * 0.5 - val_epoch_loss_stat * 0.5) > best_metric:
+            best_metric = val_epoch_acc_stat * 0.5 - val_epoch_loss_stat * 0.5
             best_epoch = epoch
             best_state_dict = model.state_dict()
 

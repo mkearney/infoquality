@@ -221,6 +221,7 @@ def main(args: Namespace):
         preprocessor=preprocessor,
         embeddings=embeddings,
         hyperparameters=hp,
+        label_map=label_map,
     )
     optimizer = optim.AdamW(model.parameters(), lr=hp.lr)
     lr_scheduler = torch.optim.lr_scheduler.StepLR(

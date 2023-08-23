@@ -1,5 +1,6 @@
 from argparse import ArgumentParser, Namespace
 from datetime import datetime
+from typing import List
 
 import polars as pl
 import torch
@@ -14,6 +15,13 @@ from torch.utils.data import DataLoader
 
 from infoquality.data import MessagesDataset
 from infoquality.model import Model
+
+
+def batch_messages(messages: List[str], batch_size: int) -> List[List[str]]:
+    batches = []
+    for i in range(0, len(messages), batch_size):
+        batches.append(messages[i : i + batch_size])
+    return batches
 
 
 def f1_score(
@@ -135,6 +143,7 @@ def main(args: Namespace):
             "/Users/mwk/data/movie-genre-prediction/valid.parquet"
         )
         test_df = pl.read_parquet("/Users/mwk/data/movie-genre-prediction/test.parquet")
+
         label_map = {
             label: idx for idx, label in enumerate(train_df["label"].unique().sort())
         }
@@ -281,6 +290,22 @@ def main(args: Namespace):
         print(f"          test_loss:  {tlss:.4f}")
         print(f"           test_acc:  {tacc:.4f}")
         print(f"            test_f1:  {tf1:.4f}")
+
+    submission = pl.read_parquet(
+        "/Users/mwk/data/movie-genre-prediction/submission-unlabeled.parquet"
+    )
+    msgs = batch_messages(submission["text"].to_list(), hp.batch_size)
+    preds = []
+    for batch in msgs:
+        preds.extend(model(batch).argmax(1).tolist())
+    revlabelmap = {v: k for k, v in label_map.items()}
+    labels = pl.Series([revlabelmap[i] for i in preds])
+    ids = pl.read_parquet(
+        "/Users/mwk/data/movie-genre-prediction/submission-ids.parquet"
+    )
+    ids.with_columns(genre=labels).write_parquet(
+        "/Users/mwk/data/movie-genre-prediction/submission-labeled.parquet"
+    )
 
     # -------------------------------------------------------------------
     # SAVE MODEL

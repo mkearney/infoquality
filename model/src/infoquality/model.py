@@ -1,10 +1,9 @@
 import math
 from datetime import datetime
-from typing import List
+from typing import Dict, List, Optional
 
 import torch
 import torch.nn as nn
-
 from infoquality.hyperparameters import HyperParameters
 from infoquality.preprocessor import Preprocessor
 
@@ -37,11 +36,16 @@ class Model(nn.Module):
         preprocessor: Preprocessor,
         embeddings: torch.Tensor,
         hyperparameters: HyperParameters,
+        label_map: Optional[Dict[str, int]] = None,
     ):
         super(Model, self).__init__()
         self.hp = hyperparameters
         self.name = self.hp.name
         self.version = datetime.now().strftime(f"{self.hp.version}.%Y%m%d%H%M%S")
+        if not label_map:
+            self.label_map: Dict[str, int] = {
+                str(i): i for i in range(self.hp.num_classes)
+            }
         self.preprocessor: Preprocessor = preprocessor
         self.embeddings: torch.Tensor = embeddings.detach().clone()
         self.embedding_dim: int = self.embeddings.shape[1]

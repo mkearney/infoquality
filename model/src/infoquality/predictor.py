@@ -32,7 +32,7 @@ class Predictor:
         bs: int,
     ) -> Generator[List[str], List[str], None]:
         for i in range(0, len(msgs), bs):
-            yield msgs[i: i + bs] # noqa
+            yield msgs[i : i + bs] # noqa
 
     def predict_batch(
         self,

@@ -1,4 +1,3 @@
-import math
 from datetime import datetime
 from typing import Dict, List, Optional
 
@@ -11,13 +10,19 @@ from infoquality.preprocessor import Preprocessor
 class PositionalEncoding(nn.Module):
     def __init__(self, dim_model, max_len):
         super().__init__()
+        # (max_len, dim_model)
         pos_encoding = torch.zeros(max_len, dim_model)
+        # (max_len, 1)
         positions_list = torch.arange(0, max_len, dtype=torch.float).view(-1, 1)
+        # (dim_model / 2)
         division_term = torch.exp(
-            torch.arange(0, dim_model, 2).float() * (-math.log(10000.0)) / dim_model
+            torch.arange(0, dim_model, 2).float() * -9.210340371976184 / dim_model
         )
+        # (max_len, dim_model / 2) – columns 0, 2, 4...
         pos_encoding[:, 0::2] = torch.sin(positions_list * division_term)
+        # (max_len, dim_model / 2) – columns 1, 3, 5...
         pos_encoding[:, 1::2] = torch.cos(positions_list * division_term)
+        # (1, max_len, dim_model)
         pos_encoding = pos_encoding.unsqueeze(0)
         self.register_buffer("pos_encoding", pos_encoding)
 
@@ -90,4 +95,5 @@ class Model(nn.Module):
         masked = self.pos_encoder(embedded)
         output = self.transformer(embedded, masked)
         output = self.fc(output)
-        return output.mean(dim=1)
+        return output.sum(dim=2)
+        # return output.mean(dim=1)

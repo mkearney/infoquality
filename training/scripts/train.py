@@ -20,7 +20,7 @@ from infoquality.model import Model
 def batch_messages(messages: List[str], batch_size: int) -> List[List[str]]:
     batches = []
     for i in range(0, len(messages), batch_size):
-        batches.append(messages[i : i + batch_size])
+        batches.append(messages[i : i + batch_size]) # noqa
     return batches
 
 

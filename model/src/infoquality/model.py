@@ -4,29 +4,31 @@ from typing import Dict, List, Optional
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 import torch.optim.lr_scheduler as lr_scheduler
 from infoquality.hyperparameters import HyperParameters
 from infoquality.preprocessor import Preprocessor
-from torch.nn import TransformerEncoder, TransformerEncoderLayer
 
 
 class PositionalEncoding(nn.Module):
-    def __init__(self, dim_model, max_len):
+    def __init__(self, embedding_dimensions, max_len):
         super().__init__()
-        # (max_len, dim_model)
-        pos_encoding = torch.zeros(max_len, dim_model)
+        # (max_len, embedding_dimensions)
+        pos_encoding = torch.zeros(max_len, embedding_dimensions)
         # (max_len, 1)
         positions_list = torch.arange(0, max_len, dtype=torch.float).view(-1, 1)
-        # (dim_model / 2)
+        # (embedding_dimensions / 2)
         division_term = torch.exp(
-            torch.arange(0, dim_model, 2).float() * (-math.log(10000.0)) / dim_model
+            torch.arange(0, embedding_dimensions, 2).float()
+            * (-math.log(10000.0))
+            / embedding_dimensions
         )
-        # (max_len, dim_model / 2) – columns 0, 2, 4...
+        # (max_len, embedding_dimensions / 2) – columns 0, 2, 4...
         pos_encoding[:, 0::2] = torch.sin(positions_list * division_term)
-        # (max_len, dim_model / 2) – columns 1, 3, 5...
+        # (max_len, embedding_dimensions / 2) – columns 1, 3, 5...
         pos_encoding[:, 1::2] = torch.cos(positions_list * division_term)
-        # (1, max_len, dim_model)
+        # (1, max_len, embedding_dimensions)
         pos_encoding = pos_encoding.unsqueeze(0)
         self.register_buffer("pos_encoding", pos_encoding)
 
@@ -48,23 +50,23 @@ class Model(nn.Module):
         label_map: Optional[Dict[str, int]] = None,
     ):
         super(Model, self).__init__()
-        self.hp = hyperparameters
-        self.name = self.hp.name
-        self.version = datetime.now().strftime(f"{self.hp.version}.%Y%m%d%H%M%S")
+        self.hyperparameters = hyperparameters
+        self.name = self.hyperparameters.name
+        self.version = datetime.now().strftime(
+            f"{self.hyperparameters.version}.%Y%m%d%H%M%S"
+        )
         if not label_map:
             self.label_map: Dict[str, int] = {
-                str(i): i for i in range(self.hp.num_classes)
+                str(i): i for i in range(self.hyperparameters.num_classes)
             }
         self.preprocessor: Preprocessor = preprocessor
         self.embeddings: torch.Tensor = embeddings.detach().clone()
-        self.embedding_dim: int = self.embeddings.shape[1]
-        self.num_classes = self.hp.num_classes
-        self.dropout_p: float = self.hp.dropout
+        self.embedding_dimensions: int = self.embeddings.shape[1]
         self.pos_encoder = PositionalEncoding(
-            dim_model=self.embedding_dim,
+            embedding_dimensions=self.embedding_dimensions,
             max_len=preprocessor.max_len,
         )
-        hidden_dim = self.embedding_dim // 2
+        hidden_dim = self.embedding_dimensions // 2
 
         self.embedding = nn.Embedding.from_pretrained(
             self.embeddings,
@@ -73,30 +75,32 @@ class Model(nn.Module):
         )
 
         self.pos_encoder = PositionalEncoding(
-            dim_model=self.embedding_dim,
+            embedding_dimensions=self.embedding_dimensions,
             max_len=preprocessor.max_len,
         )
 
-        encoder_layers = TransformerEncoderLayer(
-            d_model=self.embedding_dim,
-            nhead=self.hp.num_heads,
+        encoder_layers = nn.TransformerEncoderLayer(
+            d_model=self.embedding_dimensions,
+            nhead=self.hyperparameters.num_heads,
             dim_feedforward=hidden_dim,
-            dropout=self.hp.dropout,
+            dropout=self.hyperparameters.dropout,
             batch_first=True,
-            activation="gelu",  # Experiment with different activations
+            activation=self.hyperparameters.activation,
         )
 
-        self.transformer_encoder = TransformerEncoder(
-            encoder_layers, self.hp.num_layers
+        self.transformer_encoder = nn.TransformerEncoder(
+            encoder_layers, num_layers=self.hyperparameters.num_layers
         )
 
-        self.fc = nn.Linear(self.embedding_dim, self.hp.num_classes)
-        self.dropout = nn.Dropout(self.hp.dropout)
-        self.layer_norm = nn.LayerNorm(self.embedding_dim)  # Add Layer Normalization
+        self.fc = nn.Linear(self.embedding_dimensions, self.hyperparameters.num_classes)
+        self.dropout = nn.Dropout(self.hyperparameters.dropout)
+        self.layer_norm = nn.LayerNorm(self.embedding_dimensions)
 
         self.loss_fn = nn.CrossEntropyLoss()
-        self.optimizer = optim.Adam(self.parameters(), lr=self.hp.lr)
-        self.scheduler = lr_scheduler.StepLR(self.optimizer, step_size=3, gamma=0.5)
+        self.optimizer = optim.AdamW(self.parameters(), lr=self.hyperparameters.lr)
+        self.scheduler = lr_scheduler.StepLR(
+            self.optimizer, step_size=1, gamma=self.hyperparameters.gamma
+        )
 
     def as_tensors(self, messages: List[str]) -> List[torch.Tensor]:
         return [
@@ -110,15 +114,20 @@ class Model(nn.Module):
             indices, batch_first=True, padding_value=self.preprocessor.pad_idx
         )
         embedded = self.embedding(padded)
-        if self.dropout_p > 0:
+        if self.hyperparameters.dropout > 0:
             embedded = self.dropout(embedded)
-        embedded = self.layer_norm(embedded)  # Apply Layer Normalization
+        embedded = self.layer_norm(embedded)
         masked = self.pos_encoder(embedded)
-        output = self.transformer_encoder(masked)  # Use TransformerEncoder
-        output = self.fc(output)
-        mean_pooled = output.mean(dim=1)
-        max_pooled, _ = output.max(dim=1)
-        return mean_pooled + max_pooled
+        transformed = self.transformer_encoder(masked)
+        output = self.fc(transformed)
+        mean_pooled = F.adaptive_avg_pool1d(output.permute(0, 2, 1), 1).view(
+            output.size(0), -1
+        )
+        max_pooled = F.adaptive_max_pool1d(output.permute(0, 2, 1), 1).view(
+            output.size(0), -1
+        )
+        combined_pooled = mean_pooled + max_pooled
+        return combined_pooled
 
     def train_step(self, messages: List[str], targets: List[int]):
         self.train()

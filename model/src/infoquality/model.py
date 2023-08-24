@@ -4,8 +4,11 @@ from typing import Dict, List, Optional
 
 import torch
 import torch.nn as nn
+import torch.optim as optim
+import torch.optim.lr_scheduler as lr_scheduler
 from infoquality.hyperparameters import HyperParameters
 from infoquality.preprocessor import Preprocessor
+from torch.nn import TransformerEncoder, TransformerEncoderLayer
 
 
 class PositionalEncoding(nn.Module):
@@ -62,22 +65,38 @@ class Model(nn.Module):
             max_len=preprocessor.max_len,
         )
         hidden_dim = self.embedding_dim // 2
+
         self.embedding = nn.Embedding.from_pretrained(
             self.embeddings,
             freeze=False,
             padding_idx=self.preprocessor.pad_idx,
         )
-        self.transformer = nn.Transformer(
+
+        self.pos_encoder = PositionalEncoding(
+            dim_model=self.embedding_dim,
+            max_len=preprocessor.max_len,
+        )
+
+        encoder_layers = TransformerEncoderLayer(
             d_model=self.embedding_dim,
             nhead=self.hp.num_heads,
-            num_encoder_layers=self.hp.num_layers,
-            num_decoder_layers=self.hp.num_layers,
             dim_feedforward=hidden_dim,
             dropout=self.hp.dropout,
             batch_first=True,
+            activation="gelu",  # Experiment with different activations
         )
+
+        self.transformer_encoder = TransformerEncoder(
+            encoder_layers, self.hp.num_layers
+        )
+
         self.fc = nn.Linear(self.embedding_dim, self.hp.num_classes)
         self.dropout = nn.Dropout(self.hp.dropout)
+        self.layer_norm = nn.LayerNorm(self.embedding_dim)  # Add Layer Normalization
+
+        self.loss_fn = nn.CrossEntropyLoss()
+        self.optimizer = optim.Adam(self.parameters(), lr=self.hp.lr)
+        self.scheduler = lr_scheduler.StepLR(self.optimizer, step_size=3, gamma=0.5)
 
     def as_tensors(self, messages: List[str]) -> List[torch.Tensor]:
         return [
@@ -93,7 +112,28 @@ class Model(nn.Module):
         embedded = self.embedding(padded)
         if self.dropout_p > 0:
             embedded = self.dropout(embedded)
+        embedded = self.layer_norm(embedded)  # Apply Layer Normalization
         masked = self.pos_encoder(embedded)
-        output = self.transformer(embedded, masked)
+        output = self.transformer_encoder(masked)  # Use TransformerEncoder
         output = self.fc(output)
-        return output.max(dim=1)[0]
+        mean_pooled = output.mean(dim=1)
+        max_pooled, _ = output.max(dim=1)
+        return mean_pooled + max_pooled
+
+    def train_step(self, messages: List[str], targets: List[int]):
+        self.train()
+        self.optimizer.zero_grad()
+        outputs = self.forward(messages)
+        loss = self.loss_fn(outputs, torch.tensor(targets))
+        loss.backward()
+        self.optimizer.step()
+        self.scheduler.step()
+        return loss.item()
+
+    def evaluate(self, messages: List[str], targets: List[int]):
+        self.eval()
+        with torch.no_grad():
+            outputs = self.forward(messages)
+            loss = self.loss_fn(outputs, torch.tensor(targets))
+            predicted_classes = outputs.argmax(dim=1).tolist()
+        return loss.item(), predicted_classes

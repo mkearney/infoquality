@@ -13,6 +13,7 @@ from infoquality.preprocessor import Preprocessor
 from infoquality.save import ModelSaver
 from infoquality.utils import get_logger
 from pydantic import BaseModel
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
 
 from infoquality.data import MessagesDataset
@@ -211,7 +212,11 @@ def main(args: Namespace):
     # HYPERPARAMETERS & MODEL COMPONENTS
     # -------------------------------------------------------------------
     preprocessor = Preprocessor(max_len=hp.max_len)
-    embeddings = bert_embeddings[:, : hp.embedding_dimensions].detach().clone()  # noqa
+    embeddings = (
+        bert_embeddings[:, : hp.embedding_dimensions]  # noqa # type: ignore
+        .detach()
+        .clone()
+    )
     model = Model(
         preprocessor=preprocessor,
         embeddings=embeddings,
@@ -219,10 +224,8 @@ def main(args: Namespace):
         label_map=label_map,
     )
     optimizer = optim.AdamW(model.parameters(), lr=hp.lr)
-    lr_scheduler = torch.optim.lr_scheduler.StepLR(
-        optimizer,
-        step_size=1,
-        gamma=hp.gamma,
+    lr_scheduler = ReduceLROnPlateau(
+        optimizer, mode="max", factor=hp.gamma, patience=2, verbose=False
     )
     criterion = nn.CrossEntropyLoss()
     train_dataloader = DataLoader(train_data, batch_size=hp.batch_size, shuffle=True)
@@ -237,8 +240,12 @@ def main(args: Namespace):
     # -------------------------------------------------------------------
     # TRAINING LOOOP
     # -------------------------------------------------------------------
-    best_metric, best_state_dict = -99, model.state_dict()
+    best_metric = -float("inf")
+    best_val_loss = float("inf")
+    early_stopping_counter = 0
+    best_state_dict = model.state_dict()
     best_epoch = 0
+    patience = 9
     start_time = datetime.now()
     metrics = Metrics()
 
@@ -259,7 +266,7 @@ def main(args: Namespace):
             loss.backward()
             nn.utils.clip_grad.clip_grad_value_(model.parameters(), hp.clip_value)
             optimizer.step()
-            trn_epoch_loss.append(loss.mean().item())
+            trn_epoch_loss.append(loss.item())
             if i == hp.num_steps:
                 break
 
@@ -271,8 +278,7 @@ def main(args: Namespace):
             for i, (vmessages, vtargets) in enumerate(valid_dataloader):
                 voutputs = model(vmessages)
                 vloss = criterion(voutputs, vtargets.long())
-                # get batch mean of each metric
-                val_epoch_loss.append(vloss.mean().item())
+                val_epoch_loss.append(vloss.item())
                 val_epoch_acc.append(accuracy(voutputs, vtargets))
                 val_epoch_f1.append(f1_score(voutputs, vtargets))
                 if i == hp.num_steps:
@@ -291,7 +297,10 @@ def main(args: Namespace):
             "val_acc": val_epoch_acc_stat,
             "val_f1": val_epoch_f1_stat,
         }
-        # just to make it appear in a better order and nicer format
+        metrics.append(epoch=epoch, metrics=epoch_metrics)
+        # --------------------------------------------------------------
+        # metrics logging
+        # --------------------------------------------------------------
         epoch_metrics_logging = {
             "_loss": trn_epoch_loss_stat,
             "_val_loss": val_epoch_loss_stat,
@@ -305,35 +314,51 @@ def main(args: Namespace):
         logger.info(
             now, __ep=f"{epoch:3d}", __lr=f"{epoch_lr:.5f}", **epoch_metrics_logging
         )
-        metrics.append(epoch=epoch, metrics=epoch_metrics)
 
         # --------------------------------------------------------------
         # track best epoch
         # --------------------------------------------------------------
-        if (val_epoch_acc_stat * 0.5 - val_epoch_loss_stat * 0.5) > best_metric:
-            best_metric = val_epoch_acc_stat * 0.5 - val_epoch_loss_stat * 0.5
+        if val_epoch_acc_stat > best_metric:
+            best_metric = val_epoch_acc_stat
             best_epoch = epoch
             best_state_dict = model.state_dict()
 
-        if epoch == hp.num_epochs - 1:
-            end_time = datetime.now()
-            duration = end_time - start_time
-            if duration.total_seconds() <= 120:
-                logger.info("duration", seconds=f"{duration.total_seconds():,.2f}")
-            else:
-                logger.info("duration", minutes=f"{duration.total_seconds()/60:,.2f}")
-            logger.info(
-                "best_metric",
-                epoch=best_epoch,
-                metric="loss",
-                value=f"{best_metric:.4f}",
-            )
+        if val_epoch_loss_stat < best_val_loss:
+            best_val_loss = val_epoch_loss_stat
+            early_stopping_counter = 0
         else:
-            # if this isn't the last epoch, then update lr
-            lr_scheduler.step()
+            early_stopping_counter += 1
+            if early_stopping_counter >= patience:
+                logger.info(
+                    "__early_stopping__",
+                    early_stopping_counter=early_stopping_counter,
+                    patience=patience,
+                )
+                break
+
+        lr_scheduler.step(val_epoch_acc_stat)
+
+    # ------------------------------------------------------------------
+    # training duration
+    # ------------------------------------------------------------------
+    end_time = datetime.now()
+    duration = end_time - start_time
+    if duration.total_seconds() <= 120:
+        logger.info("duration", seconds=f"{duration.total_seconds():,.2f}")
+    else:
+        logger.info("duration", minutes=f"{duration.total_seconds()/60:,.2f}")
+    # ------------------------------------------------------------------
+    # best epoch logging
+    # ------------------------------------------------------------------
+    logger.info(
+        "best_metric",
+        epoch=best_epoch,
+        metric="loss",
+        value=f"{best_metric:.4f}",
+    )
 
     # -------------------------------------------------------------------
-    # TEST
+    # TEST SET
     # -------------------------------------------------------------------
     with torch.no_grad():
         test_loss, acc, f1s = [], [], []
@@ -344,13 +369,14 @@ def main(args: Namespace):
             epoch_f1 = f1_score(toutputs, ttargets)
             f1s.append(epoch_f1)
             test_loss.append(tloss.mean().item())
-            if i == hp.num_steps:
-                break
         tacc = sum(acc) / len(acc)
         tf1 = sum(f1s) / len(f1s)
         tlss = sum(test_loss) / len(test_loss)
         logger.info("test", loss=f"{tlss:.4f}", acc=f"{tacc:.4f}", f1=f"{tf1:.4f}")
 
+    # ------------------------------------------------------------------
+    # HF DATASET SUBMISSION
+    # ------------------------------------------------------------------
     submission = pl.read_parquet(
         "/Users/mwk/data/movie-genre-prediction/submission-unlabeled.parquet"
     )

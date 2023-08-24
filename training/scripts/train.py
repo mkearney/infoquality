@@ -256,7 +256,7 @@ def main(args: Namespace):
             outputs = model(messages)
             loss = criterion(outputs, targets.long())
             loss.backward()
-            nn.utils.clip_grad.clip_grad_value_(model.parameters(), 3.0)
+            nn.utils.clip_grad.clip_grad_value_(model.parameters(), 1.0)
             optimizer.step()
             trn_epoch_loss.append(loss.mean().item())
             if i == hp.num_steps:
@@ -342,7 +342,7 @@ def main(args: Namespace):
             acc.append(accuracy(toutputs, ttargets))
             epoch_f1 = f1_score(toutputs, ttargets)
             f1s.append(epoch_f1)
-            test_loss.append(tloss.item() / len(ttargets))
+            test_loss.append(tloss.mean().item())
             if i == hp.num_steps:
                 break
         tacc = sum(acc) / len(acc)

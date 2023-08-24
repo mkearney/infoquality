@@ -103,13 +103,14 @@ def get_parser() -> ArgumentParser:
     parser.add_argument("--lr", type=float)
     parser.add_argument("--gamma", type=float)
     parser.add_argument("--max-len", type=int)
-    parser.add_argument("--embedding-dim", type=int)
+    parser.add_argument("--embedding-dimensions", type=int)
     parser.add_argument("--num-layers", type=int)
     parser.add_argument("--num-heads", type=int)
     parser.add_argument("--num-classes", type=int)
+    parser.add_argument("--clip-value", type=float)
     parser.add_argument("--version", type=str)
     parser.add_argument("--name", type=str)
-    parser.add_argument("--theta", type=float, default=1.0)
+    parser.add_argument("--activation", type=str)
     parser.add_argument(
         "--output-dir", type=str, default="/Users/mwk/models/moviegenre"
     )
@@ -210,7 +211,7 @@ def main(args: Namespace):
     # HYPERPARAMETERS & MODEL COMPONENTS
     # -------------------------------------------------------------------
     preprocessor = Preprocessor(max_len=hp.max_len)
-    embeddings = bert_embeddings[:, : hp.embedding_dim].detach().clone()  # type: ignore
+    embeddings = bert_embeddings[:, : hp.embedding_dimensions].detach().clone()  # noqa
     model = Model(
         preprocessor=preprocessor,
         embeddings=embeddings,
@@ -220,7 +221,7 @@ def main(args: Namespace):
     optimizer = optim.AdamW(model.parameters(), lr=hp.lr)
     lr_scheduler = torch.optim.lr_scheduler.StepLR(
         optimizer,
-        step_size=args.theta,
+        step_size=1,
         gamma=hp.gamma,
     )
     criterion = nn.CrossEntropyLoss()
@@ -256,7 +257,7 @@ def main(args: Namespace):
             outputs = model(messages)
             loss = criterion(outputs, targets.long())
             loss.backward()
-            nn.utils.clip_grad.clip_grad_value_(model.parameters(), 1.0)
+            nn.utils.clip_grad.clip_grad_value_(model.parameters(), hp.clip_value)
             optimizer.step()
             trn_epoch_loss.append(loss.mean().item())
             if i == hp.num_steps:

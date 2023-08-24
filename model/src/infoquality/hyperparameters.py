@@ -22,7 +22,7 @@ class HyperParameters(BaseModel):
     batch_size: int = 10
     dropout: float = 0.1
     lr: float = 0.0002
-    gamma: float = 0.95
+    gamma: float = 0.5
     max_len: int = 128
     embedding_dimensions: int = 128
     num_layers: int = 2

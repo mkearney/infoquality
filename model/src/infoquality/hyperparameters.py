@@ -32,6 +32,7 @@ class HyperParameters(BaseModel):
     name: str = "iq"
     activation: str = ActivationEnum.relu
     clip_value: float = 1.0
+    patience: int = 23
 
     @model_validator(mode="after")
     def dimensions_must_be_divisible_by_heads(self) -> "HyperParameters":

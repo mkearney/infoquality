@@ -5,8 +5,6 @@ from typing import Dict, List, Optional
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.optim as optim
-import torch.optim.lr_scheduler as lr_scheduler
 from infoquality.hyperparameters import HyperParameters
 from infoquality.preprocessor import Preprocessor
 
@@ -67,18 +65,17 @@ class Model(nn.Module):
             max_len=preprocessor.max_len,
         )
         hidden_dim = self.embedding_dimensions // 2
-
         self.embedding = nn.Embedding.from_pretrained(
             self.embeddings,
             freeze=False,
             padding_idx=self.preprocessor.pad_idx,
         )
-
+        self.dropout = nn.Dropout(self.hyperparameters.dropout)
+        self.layer_norm = nn.LayerNorm(self.embedding_dimensions)
         self.pos_encoder = PositionalEncoding(
             embedding_dimensions=self.embedding_dimensions,
             max_len=preprocessor.max_len,
         )
-
         encoder_layers = nn.TransformerEncoderLayer(
             d_model=self.embedding_dimensions,
             nhead=self.hyperparameters.num_heads,
@@ -87,22 +84,14 @@ class Model(nn.Module):
             batch_first=True,
             activation=self.hyperparameters.activation,
         )
-
         self.transformer_encoder = nn.TransformerEncoder(
             encoder_layers, num_layers=self.hyperparameters.num_layers
         )
-
-        self.fc = nn.Linear(self.embedding_dimensions, self.hyperparameters.num_classes)
-        self.dropout = nn.Dropout(self.hyperparameters.dropout)
-        self.layer_norm = nn.LayerNorm(self.embedding_dimensions)
-
-        self.loss_fn = nn.CrossEntropyLoss()
-        self.optimizer = optim.AdamW(self.parameters(), lr=self.hyperparameters.lr)
-        self.scheduler = lr_scheduler.StepLR(
-            self.optimizer, step_size=1, gamma=self.hyperparameters.gamma
+        self.fc0 = nn.Linear(
+            self.embedding_dimensions, self.hyperparameters.num_classes
         )
-        self.activation = nn.Linear(
-            self.hyperparameters.num_classes * 2, self.hyperparameters.num_classes
+        self.fc1 = nn.Linear(
+            self.hyperparameters.num_classes * 3, self.hyperparameters.num_classes
         )
 
     def as_tensors(self, messages: List[str]) -> List[torch.Tensor]:
@@ -122,30 +111,16 @@ class Model(nn.Module):
         embedded = self.layer_norm(embedded)
         masked = self.pos_encoder(embedded)
         transformed = self.transformer_encoder(masked)
-        output = self.fc(transformed)
+        output = self.fc0(transformed)
         mean_pooled = F.adaptive_avg_pool1d(output.permute(0, 2, 1), 1).view(
             output.size(0), -1
         )
         max_pooled = F.adaptive_max_pool1d(output.permute(0, 2, 1), 1).view(
             output.size(0), -1
         )
-        pooled = torch.cat([mean_pooled, max_pooled], dim=1)
-        return self.activation(pooled)
-
-    def train_step(self, messages: List[str], targets: List[int]):
-        self.train()
-        self.optimizer.zero_grad()
-        outputs = self.forward(messages)
-        loss = self.loss_fn(outputs, torch.tensor(targets))
-        loss.backward()
-        self.optimizer.step()
-        self.scheduler.step()
-        return loss.item()
-
-    def evaluate(self, messages: List[str], targets: List[int]):
-        self.eval()
-        with torch.no_grad():
-            outputs = self.forward(messages)
-            loss = self.loss_fn(outputs, torch.tensor(targets))
-            predicted_classes = outputs.argmax(dim=1).tolist()
-        return loss.item(), predicted_classes
+        std_pooled = output.std(dim=1)
+        pooled = torch.cat([mean_pooled, max_pooled, std_pooled], dim=1)
+        return self.fc1(pooled)
+        # return self.fc1(torch.cat([output, mean_pooled, max_pooled]))
+        # pooled = torch.cat([mean_pooled, max_pooled], dim=1)
+        # return self.activation(pooled)

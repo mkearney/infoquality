@@ -112,6 +112,7 @@ def get_parser() -> ArgumentParser:
     parser.add_argument("--version", type=str)
     parser.add_argument("--name", type=str)
     parser.add_argument("--activation", type=str)
+    parser.add_argument("--patience", type=int)
     parser.add_argument(
         "--output-dir", type=str, default="/Users/mwk/models/moviegenre"
     )
@@ -225,7 +226,7 @@ def main(args: Namespace):
     )
     optimizer = optim.AdamW(model.parameters(), lr=hp.lr)
     lr_scheduler = ReduceLROnPlateau(
-        optimizer, mode="max", factor=hp.gamma, patience=1, verbose=False
+        optimizer, mode="min", factor=hp.gamma, patience=2, verbose=False
     )
     criterion = nn.CrossEntropyLoss()
     train_dataloader = DataLoader(train_data, batch_size=hp.batch_size, shuffle=True)
@@ -240,9 +241,9 @@ def main(args: Namespace):
     # -------------------------------------------------------------------
     # TRAINING LOOOP
     # -------------------------------------------------------------------
-    metrics, best_metric = Metrics(), -float("inf")
+    metrics, best_metric = Metrics(), float("inf")
     best_epoch, best_state_dict = 0, model.state_dict()
-    patience, early_stopping_counter = 9, 0
+    patience, early_stopping_counter = args.patience, 0
     start_time = datetime.now()
 
     for epoch in range(hp.num_epochs):
@@ -314,8 +315,8 @@ def main(args: Namespace):
         # --------------------------------------------------------------
         # track best epoch
         # --------------------------------------------------------------
-        if val_epoch_f1_stat > best_metric:
-            best_metric = val_epoch_f1_stat
+        if val_epoch_loss_stat < best_metric:
+            best_metric = val_epoch_loss_stat
             best_epoch = epoch
             best_state_dict = model.state_dict()
             early_stopping_counter = 0
@@ -329,7 +330,7 @@ def main(args: Namespace):
                 )
                 break
 
-        lr_scheduler.step(val_epoch_f1_stat)
+        lr_scheduler.step(val_epoch_loss_stat)
 
     # ------------------------------------------------------------------
     # training duration
@@ -361,7 +362,7 @@ def main(args: Namespace):
             acc.append(accuracy(toutputs, ttargets))
             epoch_f1 = f1_score(toutputs, ttargets)
             f1s.append(epoch_f1)
-            test_loss.append(tloss.mean().item())
+            test_loss.append(tloss.item())
         tacc = sum(acc) / len(acc)
         tf1 = sum(f1s) / len(f1s)
         tlss = sum(test_loss) / len(test_loss)
@@ -370,36 +371,40 @@ def main(args: Namespace):
     # ------------------------------------------------------------------
     # HF DATASET SUBMISSION
     # ------------------------------------------------------------------
-    submission = pl.read_parquet(
-        "/Users/mwk/data/movie-genre-prediction/submission-unlabeled.parquet"
-    )
-    msgs = batch_messages(submission["text"].to_list(), hp.batch_size)
-    preds = []
-    for batch in msgs:
-        preds.extend(model(batch).argmax(1).tolist())
-    revlabelmap = {v: k for k, v in label_map.items()}
-    labels = pl.Series([revlabelmap[i] for i in preds])
-    ids = pl.read_parquet(
-        "/Users/mwk/data/movie-genre-prediction/submission-ids.parquet"
-    )
-    filename = datetime.now().strftime("submission-labeled-%Y%m%d%H%M%S.csv")
-    ids.with_columns(genre=labels).write_csv(
-        f"/Users/mwk/data/movie-genre-prediction/{filename}"
-    )
+    if tacc > 0.35:
+        logger.info("test_acc > 0.35 generating submission & saving model...")
+        submission = pl.read_parquet(
+            "/Users/mwk/data/movie-genre-prediction/submission-unlabeled.parquet"
+        )
+        msgs = batch_messages(submission["text"].to_list(), hp.batch_size)
+        preds = []
+        for batch in msgs:
+            preds.extend(model(batch).argmax(1).tolist())
+        revlabelmap = {v: k for k, v in label_map.items()}
+        labels = pl.Series([revlabelmap[i] for i in preds])
+        ids = pl.read_parquet(
+            "/Users/mwk/data/movie-genre-prediction/submission-ids.parquet"
+        )
+        filename = datetime.now().strftime("submission-labeled-%Y%m%d%H%M%S.csv")
+        ids.with_columns(genre=labels).write_csv(
+            f"/Users/mwk/data/movie-genre-prediction/{filename}"
+        )
+        # -------------------------------------------------------------------
+        # SAVE MODEL
+        # -------------------------------------------------------------------
+        model.load_state_dict(best_state_dict)
+        model.eval()
+        metrics_path = saver.save_metrics(metrics.__dict__)
+        embeddings_path = saver.save_embeddings(model)
+        state_dict_path = saver.save_state_dict(model)
+        hyperparameters_path = saver.save_hyperparameters(model)
+        logger.info("__save__", metrics=metrics_path)
+        logger.info("__save__", embeddings=embeddings_path)
+        logger.info("__save__", state_dict=state_dict_path)
+        logger.info("__save__", hyperparameters=hyperparameters_path)
 
-    # -------------------------------------------------------------------
-    # SAVE MODEL
-    # -------------------------------------------------------------------
-    model.load_state_dict(best_state_dict)
-    model.eval()
-    metrics_path = saver.save_metrics(metrics.__dict__)
-    embeddings_path = saver.save_embeddings(model)
-    state_dict_path = saver.save_state_dict(model)
-    hyperparameters_path = saver.save_hyperparameters(model)
-    logger.info("__save__", metrics=metrics_path)
-    logger.info("__save__", embeddings=embeddings_path)
-    logger.info("__save__", state_dict=state_dict_path)
-    logger.info("__save__", hyperparameters=hyperparameters_path)
+    else:
+        logger.info("test_acc < 0.35 skipping submission & not saving model...")
 
 
 if __name__ == "__main__":

@@ -101,6 +101,9 @@ class Model(nn.Module):
         self.scheduler = lr_scheduler.StepLR(
             self.optimizer, step_size=1, gamma=self.hyperparameters.gamma
         )
+        self.activation = nn.Linear(
+            self.hyperparameters.num_classes * 2, self.hyperparameters.num_classes
+        )
 
     def as_tensors(self, messages: List[str]) -> List[torch.Tensor]:
         return [
@@ -126,8 +129,8 @@ class Model(nn.Module):
         max_pooled = F.adaptive_max_pool1d(output.permute(0, 2, 1), 1).view(
             output.size(0), -1
         )
-        combined_pooled = mean_pooled + max_pooled
-        return combined_pooled
+        pooled = torch.cat([mean_pooled, max_pooled], dim=1)
+        return self.activation(pooled)
 
     def train_step(self, messages: List[str], targets: List[int]):
         self.train()

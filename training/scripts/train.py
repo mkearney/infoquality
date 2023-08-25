@@ -225,7 +225,7 @@ def main(args: Namespace):
     )
     optimizer = optim.AdamW(model.parameters(), lr=hp.lr)
     lr_scheduler = ReduceLROnPlateau(
-        optimizer, mode="max", factor=hp.gamma, patience=2, verbose=False
+        optimizer, mode="max", factor=hp.gamma, patience=1, verbose=False
     )
     criterion = nn.CrossEntropyLoss()
     train_dataloader = DataLoader(train_data, batch_size=hp.batch_size, shuffle=True)
@@ -240,14 +240,10 @@ def main(args: Namespace):
     # -------------------------------------------------------------------
     # TRAINING LOOOP
     # -------------------------------------------------------------------
-    best_metric = -float("inf")
-    best_val_loss = float("inf")
-    early_stopping_counter = 0
-    best_state_dict = model.state_dict()
-    best_epoch = 0
-    patience = 9
+    metrics, best_metric = Metrics(), -float("inf")
+    best_epoch, best_state_dict = 0, model.state_dict()
+    patience, early_stopping_counter = 9, 0
     start_time = datetime.now()
-    metrics = Metrics()
 
     for epoch in range(hp.num_epochs):
         trn_epoch_loss, val_epoch_loss = [], []
@@ -318,13 +314,10 @@ def main(args: Namespace):
         # --------------------------------------------------------------
         # track best epoch
         # --------------------------------------------------------------
-        if val_epoch_acc_stat > best_metric:
-            best_metric = val_epoch_acc_stat
+        if val_epoch_f1_stat > best_metric:
+            best_metric = val_epoch_f1_stat
             best_epoch = epoch
             best_state_dict = model.state_dict()
-
-        if val_epoch_loss_stat < best_val_loss:
-            best_val_loss = val_epoch_loss_stat
             early_stopping_counter = 0
         else:
             early_stopping_counter += 1
@@ -336,7 +329,7 @@ def main(args: Namespace):
                 )
                 break
 
-        lr_scheduler.step(val_epoch_acc_stat)
+        lr_scheduler.step(val_epoch_f1_stat)
 
     # ------------------------------------------------------------------
     # training duration

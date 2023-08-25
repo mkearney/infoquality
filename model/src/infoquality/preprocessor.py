@@ -16,7 +16,12 @@ class Preprocessor:
         self.tokenizer = tokenizer
 
     def one(self, message: str) -> List[int]:
-        return self.tokenizer.encode(message, truncation=True, max_length=self.max_len)
+        return self.tokenizer.encode(
+            message,
+            truncation=True,
+            max_length=self.max_len,
+            add_special_tokens=False,
+        )
 
     def __call__(self, messages: List[str]) -> List[List[int]]:
         return [self.one(message) for message in messages]

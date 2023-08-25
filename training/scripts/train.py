@@ -1,5 +1,7 @@
+import json
 from argparse import ArgumentParser, Namespace
 from datetime import datetime
+from pathlib import Path
 from typing import Dict, List
 
 import polars as pl
@@ -65,8 +67,17 @@ class EpochMetrics(BaseModel):
 class Metrics:
     metrics: List[EpochMetrics] = []
 
-    def epoch(self) -> List[int]:
-        return [m.epoch for m in self.metrics]
+    def collect(self) -> Dict[str, List[float]]:
+        return {
+            "epoch": self.epoch(),
+            "loss": self.loss(),
+            "val_loss": self.val_loss(),
+            "val_acc": self.val_acc(),
+            "val_f1": self.val_f1(),
+        }
+
+    def epoch(self) -> List[float]:
+        return [float(m.epoch) for m in self.metrics]
 
     def loss(self) -> List[float]:
         return [m.loss for m in self.metrics]
@@ -83,6 +94,26 @@ class Metrics:
     def append(self, epoch: int, metrics: Dict[str, float]) -> None:
         epoch_metrics = EpochMetrics(epoch=epoch, **metrics)
         self.metrics.append(epoch_metrics)
+
+    def save(
+        self,
+        output_dir: str,
+        version: str = "",
+    ) -> str:
+        version = "" if version == "" else f"-{version}"
+        save_as = f"{output_dir}/metrics{version}.json"
+        data = self.collect()
+        with open(save_as, "w") as f:
+            json.dump(data, f, indent=2)
+        return save_as
+
+
+def save_hypers(params: dict, output_dir: str, version: str) -> str:
+    version = "" if version == "" else f"-{version}"
+    save_as = f"{output_dir}/hyperparameters{version}.json"
+    with open(save_as, "w") as f:
+        json.dump(params, f, indent=2)
+    return save_as
 
 
 def get_hyperparameters_from_args(args: Namespace) -> HyperParameters:
@@ -113,9 +144,6 @@ def get_parser() -> ArgumentParser:
     parser.add_argument("--name", type=str)
     parser.add_argument("--activation", type=str)
     parser.add_argument("--patience", type=int)
-    parser.add_argument(
-        "--output-dir", type=str, default="/Users/mwk/models/moviegenre"
-    )
     return parser
 
 
@@ -126,7 +154,6 @@ def parse_args() -> Namespace:
 
 def main(args: Namespace):
     logger = get_logger(args.version, args.name)
-    logger.info("__start__")
     # -------------------------------------------------------------------
     # DATASETS: INFO QUALLITY
     # -------------------------------------------------------------------
@@ -180,12 +207,9 @@ def main(args: Namespace):
             label: idx for idx, label in enumerate(train_df["label"].unique().sort())
         }
 
-    logger.info(
-        "__nobs__",
-        train=train_df.shape[0],
-        valid=valid_df.shape[0],
-        test=test_df.shape[0],
-    )
+    logger.info("__nobs__", train=train_df.shape[0])
+    logger.info("__nobs__", valid=valid_df.shape[0])
+    logger.info("__nobs__", test=test_df.shape[0])
     train_data = MessagesDataset(
         messages=train_df["text"].to_list(),
         labels=train_df["label"].to_list(),
@@ -226,7 +250,7 @@ def main(args: Namespace):
     )
     optimizer = optim.AdamW(model.parameters(), lr=hp.lr)
     lr_scheduler = ReduceLROnPlateau(
-        optimizer, mode="min", factor=hp.gamma, patience=2, verbose=False
+        optimizer, mode="min", factor=hp.gamma, patience=0, verbose=False
     )
     criterion = nn.CrossEntropyLoss()
     train_dataloader = DataLoader(train_data, batch_size=hp.batch_size, shuffle=True)
@@ -236,7 +260,10 @@ def main(args: Namespace):
     # -------------------------------------------------------------------
     # SAVER
     # -------------------------------------------------------------------
-    saver = ModelSaver(args.output_dir, version=model.version)
+    output_dir = Path("/Users/mwk/models/").joinpath(hp.name)
+    # create output directory if it doesn't exist
+    output_dir.mkdir(parents=True, exist_ok=True)
+    saver = ModelSaver(str(output_dir), version=model.version)
 
     # -------------------------------------------------------------------
     # TRAINING LOOOP
@@ -278,8 +305,8 @@ def main(args: Namespace):
                 val_epoch_loss.append(vloss.item())
                 val_epoch_acc.append(accuracy(voutputs, vtargets))
                 val_epoch_f1.append(f1_score(voutputs, vtargets))
-                if i == hp.num_steps:
-                    break
+                # if i == hp.num_steps:
+                #     break
 
         # --------------------------------------------------------------
         # aggregate metrics
@@ -369,10 +396,22 @@ def main(args: Namespace):
         logger.info("test", loss=f"{tlss:.4f}", acc=f"{tacc:.4f}", f1=f"{tf1:.4f}")
 
     # ------------------------------------------------------------------
+    # saving metadata
+    # ------------------------------------------------------------------
+    saved_as = metrics.save("/Users/mwk/models/meta", model.version)
+    hyperparameters_path = save_hypers(
+        params=model.hyperparameters.__dict__,
+        output_dir="/Users/mwk/models/meta",
+        version=model.version,
+    )
+    logger.info("__metadata__", hyperparameters=hyperparameters_path)
+    logger.info("__metadata__", metrics=saved_as)
+
+    # ------------------------------------------------------------------
     # HF DATASET SUBMISSION
     # ------------------------------------------------------------------
-    if tacc > 0.35:
-        logger.info("test_acc > 0.35 generating submission & saving model...")
+    if tacc > 0.33:
+        logger.info("test_acc > 0.33 generating submission & saving model...")
         submission = pl.read_parquet(
             "/Users/mwk/data/movie-genre-prediction/submission-unlabeled.parquet"
         )
@@ -404,7 +443,7 @@ def main(args: Namespace):
         logger.info("__save__", hyperparameters=hyperparameters_path)
 
     else:
-        logger.info("test_acc < 0.35 skipping submission & not saving model...")
+        logger.info("test_acc < 0.33 skipping submission & not saving model...")
 
 
 if __name__ == "__main__":

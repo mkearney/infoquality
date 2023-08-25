@@ -121,6 +121,3 @@ class Model(nn.Module):
         std_pooled = output.std(dim=1)
         pooled = torch.cat([mean_pooled, max_pooled, std_pooled], dim=1)
         return self.fc1(pooled)
-        # return self.fc1(torch.cat([output, mean_pooled, max_pooled]))
-        # pooled = torch.cat([mean_pooled, max_pooled], dim=1)
-        # return self.activation(pooled)

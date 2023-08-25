@@ -1,7 +1,8 @@
 from collections import defaultdict
 from typing import List
 
-from infoquality.artifacts import bert_token_map, tokenizer
+import torch
+from infoquality.artifacts import bert_model, bert_token_map, tokenizer
 
 
 class Preprocessor:
@@ -20,7 +21,7 @@ class Preprocessor:
             message,
             truncation=True,
             max_length=self.max_len,
-            add_special_tokens=False,
+            add_special_tokens=True,
         )
 
     def __call__(self, messages: List[str]) -> List[List[int]]:

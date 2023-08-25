@@ -8,6 +8,12 @@ class ActivationEnum(str, Enum):
     gelu = "gelu"
 
 
+class BestMetric(str, Enum):
+    loss = "loss"
+    acc = "acc"
+    f1 = "f1"
+
+
 class IndivisibleException(Exception):
     def __init__(self, message: str) -> None:
         self.message = message
@@ -18,21 +24,23 @@ class IndivisibleException(Exception):
 
 class HyperParameters(BaseModel):
     num_epochs: int = 64
-    num_steps: int = 8
-    batch_size: int = 10
+    num_steps: int = 64
+    batch_size: int = 32
     dropout: float = 0.1
-    lr: float = 0.0002
-    gamma: float = 0.5
-    max_len: int = 128
+    lr: float = 0.001
+    gamma: float = 0.67
+    max_len: int = 80
     embedding_dimensions: int = 128
     num_layers: int = 2
     num_heads: int = 8
     num_classes: int = 2
     version: str = "0.1.0"
-    name: str = "iq"
+    name: str = "nlpmodel"
     activation: str = ActivationEnum.relu
     clip_value: float = 1.0
-    patience: int = 23
+    early_stopping_patience: int = 5
+    lr_patience: int = 2
+    best_metric: str = "loss"
 
     @model_validator(mode="after")
     def dimensions_must_be_divisible_by_heads(self) -> "HyperParameters":

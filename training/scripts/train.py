@@ -17,6 +17,7 @@ from infoquality.utils import get_logger
 from pydantic import BaseModel
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
+from torchmetrics import Accuracy, F1Score, Precision, Recall
 
 from infoquality.data import MessagesDataset
 from infoquality.model import Model
@@ -29,31 +30,48 @@ def batch_messages(messages: List[str], batch_size: int) -> List[List[str]]:
     return batches
 
 
-def f1_score(
-    outputs: torch.Tensor,
-    targets: torch.Tensor,
-) -> float:
-    largest_column = outputs.argmax(dim=1)
-
-    f1s = []
-    for i in range(outputs.shape[1]):
-        if not any(largest_column == i):
-            continue
-        tp = ((largest_column == i) & (targets.int() == i)).sum().item()
-        fp = ((largest_column == i) & (targets.int() != i)).sum().item()
-        fn = ((largest_column != i) & (targets.int() == i)).sum().item()
-        try:
-            f1 = 2 * tp / (2 * tp + fp + fn)
-            f1s.append(f1)
-        except ZeroDivisionError:
-            continue
-    return sum(f1s) / len(f1s)
+class FitStatistics(BaseModel):
+    acc: float
+    f1: float
+    pr: float
+    rc: float
 
 
-def accuracy(outputs: torch.Tensor, targets: torch.Tensor) -> float:
-    outputs_class = outputs.argmax(dim=1)
-    acc = (outputs_class.int() == targets.int()).sum().item() / outputs.shape[0]
-    return acc
+class Fit:
+    def __init__(
+        self, num_classes: int, task: str = "multiclass", average: str = "macro"
+    ):
+        self.num_classes = num_classes
+        self.average = average
+        self.task = task
+        self.accuracy = Accuracy(
+            task=self.task,  # type: ignore
+            num_classes=num_classes,
+            average=self.average,  # type: ignore
+        )
+        self.f1_score = F1Score(
+            task=self.task,  # type: ignore
+            num_classes=num_classes,
+            average=self.average,  # type: ignore
+        )
+        self.precision = Precision(
+            task=self.task,  # type: ignore
+            num_classes=num_classes,
+            average=self.average,  # type: ignore
+        )
+        self.recall = Recall(
+            task=self.task,  # type: ignore
+            num_classes=num_classes,
+            average=self.average,  # type: ignore
+        )
+
+    def __call__(self, output, target) -> FitStatistics:
+        return FitStatistics(
+            acc=self.accuracy(output, target),
+            f1=self.f1_score(output, target),
+            pr=self.precision(output, target),
+            rc=self.recall(output, target),
+        )
 
 
 class EpochMetrics(BaseModel):
@@ -143,7 +161,9 @@ def get_parser() -> ArgumentParser:
     parser.add_argument("--version", type=str)
     parser.add_argument("--name", type=str)
     parser.add_argument("--activation", type=str)
-    parser.add_argument("--patience", type=int)
+    parser.add_argument("--early-stopping-patience", type=int)
+    parser.add_argument("--lr-patience", type=int)
+    parser.add_argument("--best-metric", type=str)
     return parser
 
 
@@ -250,12 +270,17 @@ def main(args: Namespace):
     )
     optimizer = optim.AdamW(model.parameters(), lr=hp.lr)
     lr_scheduler = ReduceLROnPlateau(
-        optimizer, mode="min", factor=hp.gamma, patience=0, verbose=False
+        optimizer,
+        mode="min",
+        factor=hp.gamma,
+        patience=hp.lr_patience,
+        verbose=False,
     )
     criterion = nn.CrossEntropyLoss()
     train_dataloader = DataLoader(train_data, batch_size=hp.batch_size, shuffle=True)
     valid_dataloader = DataLoader(valid_data, batch_size=hp.batch_size, shuffle=True)
     test_dataloader = DataLoader(test_data, batch_size=hp.batch_size, shuffle=True)
+    fit = Fit(num_classes=hp.num_classes)
 
     # -------------------------------------------------------------------
     # SAVER
@@ -268,14 +293,16 @@ def main(args: Namespace):
     # -------------------------------------------------------------------
     # TRAINING LOOOP
     # -------------------------------------------------------------------
-    metrics, best_metric = Metrics(), float("inf")
+    metrics, best_metric_value = Metrics(), float("inf")
     best_epoch, best_state_dict = 0, model.state_dict()
-    patience, early_stopping_counter = args.patience, 0
     start_time = datetime.now()
+    logger.info("__init__", time=start_time.strftime("%Y-%m-%d %H:%M:%S"))
+    early_stopping_counter = 0
 
     for epoch in range(hp.num_epochs):
         trn_epoch_loss, val_epoch_loss = [], []
         val_epoch_acc, val_epoch_f1 = [], []
+        val_epoch_pr, val_epoch_rc = [], []
         epoch_lr = optimizer.param_groups[0]["lr"]
 
         # --------------------------------------------------------------
@@ -288,7 +315,7 @@ def main(args: Namespace):
             outputs = model(messages)
             loss = criterion(outputs, targets.long())
             loss.backward()
-            nn.utils.clip_grad.clip_grad_value_(model.parameters(), hp.clip_value)
+            # nn.utils.clip_grad.clip_grad_value_(model.parameters(), hp.clip_value)
             optimizer.step()
             trn_epoch_loss.append(loss.item())
             if i == hp.num_steps:
@@ -303,10 +330,13 @@ def main(args: Namespace):
                 voutputs = model(vmessages)
                 vloss = criterion(voutputs, vtargets.long())
                 val_epoch_loss.append(vloss.item())
-                val_epoch_acc.append(accuracy(voutputs, vtargets))
-                val_epoch_f1.append(f1_score(voutputs, vtargets))
-                # if i == hp.num_steps:
-                #     break
+                fit_metrics = fit(voutputs, vtargets)
+                val_epoch_acc.append(fit_metrics.acc)
+                val_epoch_f1.append(fit_metrics.f1)
+                val_epoch_pr.append(fit_metrics.pr)
+                val_epoch_rc.append(fit_metrics.rc)
+                if i == hp.num_steps:
+                    break
 
         # --------------------------------------------------------------
         # aggregate metrics
@@ -315,21 +345,27 @@ def main(args: Namespace):
         val_epoch_loss_stat = sum(val_epoch_loss) / len(val_epoch_loss)
         val_epoch_acc_stat = sum(val_epoch_acc) / len(val_epoch_acc)
         val_epoch_f1_stat = sum(val_epoch_f1) / len(val_epoch_f1)
+        val_epoch_pr_stat = sum(val_epoch_pr) / len(val_epoch_pr)
+        val_epoch_rc_stat = sum(val_epoch_rc) / len(val_epoch_rc)
         epoch_metrics = {
             "loss": trn_epoch_loss_stat,
             "val_loss": val_epoch_loss_stat,
             "val_acc": val_epoch_acc_stat,
             "val_f1": val_epoch_f1_stat,
+            "val_pr": val_epoch_pr_stat,
+            "val_rc": val_epoch_rc_stat,
         }
         metrics.append(epoch=epoch, metrics=epoch_metrics)
         # --------------------------------------------------------------
         # metrics logging
         # --------------------------------------------------------------
         epoch_metrics_logging = {
-            "_loss": trn_epoch_loss_stat,
-            "_val_loss": val_epoch_loss_stat,
-            "val_acc": val_epoch_acc_stat,
-            "val_f1": val_epoch_f1_stat,
+            "_trn": trn_epoch_loss_stat,
+            "_val": val_epoch_loss_stat,
+            "acc": val_epoch_acc_stat,
+            "f1": val_epoch_f1_stat,
+            "pr": val_epoch_pr_stat,
+            "rc": val_epoch_rc_stat,
         }
         epoch_metrics_logging = {
             k: f"{v:.4f}" for k, v in epoch_metrics_logging.items()
@@ -342,18 +378,17 @@ def main(args: Namespace):
         # --------------------------------------------------------------
         # track best epoch
         # --------------------------------------------------------------
-        if val_epoch_loss_stat < best_metric:
-            best_metric = val_epoch_loss_stat
+        if val_epoch_loss_stat < best_metric_value:
+            best_metric_value = val_epoch_loss_stat
             best_epoch = epoch
             best_state_dict = model.state_dict()
             early_stopping_counter = 0
         else:
             early_stopping_counter += 1
-            if early_stopping_counter >= patience:
+            if early_stopping_counter >= hp.early_stopping_patience:
                 logger.info(
                     "__early_stopping__",
                     early_stopping_counter=early_stopping_counter,
-                    patience=patience,
                 )
                 break
 
@@ -363,6 +398,7 @@ def main(args: Namespace):
     # training duration
     # ------------------------------------------------------------------
     end_time = datetime.now()
+    logger.info("__end__", time=end_time.strftime("%Y-%m-%d %H:%M:%S"))
     duration = end_time - start_time
     if duration.total_seconds() <= 120:
         logger.info("duration", seconds=f"{duration.total_seconds():,.2f}")
@@ -374,26 +410,37 @@ def main(args: Namespace):
     logger.info(
         "best_metric",
         epoch=best_epoch,
-        metric="loss",
-        value=f"{best_metric:.4f}",
+        metric=hp.best_metric,
+        value=f"{best_metric_value:.4f}",
     )
 
     # -------------------------------------------------------------------
     # TEST SET
     # -------------------------------------------------------------------
     with torch.no_grad():
-        test_loss, acc, f1s = [], [], []
+        test_loss, acc, f1s, prs, rcs = [], [], [], [], []
         for i, (tmessages, ttargets) in enumerate(test_dataloader):
             toutputs = model(tmessages)
             tloss = criterion(toutputs, ttargets.long())
-            acc.append(accuracy(toutputs, ttargets))
-            epoch_f1 = f1_score(toutputs, ttargets)
-            f1s.append(epoch_f1)
+            fit_metrics = fit(toutputs, ttargets)
+            acc.append(fit_metrics.acc)
+            f1s.append(fit_metrics.f1)
+            prs.append(fit_metrics.pr)
+            rcs.append(fit_metrics.rc)
             test_loss.append(tloss.item())
         tacc = sum(acc) / len(acc)
         tf1 = sum(f1s) / len(f1s)
         tlss = sum(test_loss) / len(test_loss)
-        logger.info("test", loss=f"{tlss:.4f}", acc=f"{tacc:.4f}", f1=f"{tf1:.4f}")
+        tpr = sum(prs) / len(prs)
+        trc = sum(rcs) / len(rcs)
+        logger.info(
+            "test",
+            loss=f"{tlss:.4f}",
+            acc=f"{tacc:.4f}",
+            f1=f"{tf1:.4f}",
+            pr=f"{tpr:.4f}",
+            rc=f"{trc:.4f}",
+        )
 
     # ------------------------------------------------------------------
     # saving metadata

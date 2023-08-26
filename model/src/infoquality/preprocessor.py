@@ -1,7 +1,6 @@
 from collections import defaultdict
 from typing import List
 
-import torch
 from infoquality.artifacts import bert_model, bert_token_map, tokenizer
 
 

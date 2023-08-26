@@ -277,6 +277,7 @@ def main(args: Namespace):
         verbose=False,
     )
     criterion = nn.CrossEntropyLoss()
+    lcriterion = nn.CrossEntropyLoss(reduction="none")
     train_dataloader = DataLoader(train_data, batch_size=hp.batch_size, shuffle=True)
     valid_dataloader = DataLoader(valid_data, batch_size=hp.batch_size, shuffle=True)
     test_dataloader = DataLoader(test_data, batch_size=hp.batch_size, shuffle=True)
@@ -315,7 +316,7 @@ def main(args: Namespace):
             outputs = model(messages)
             loss = criterion(outputs, targets.long())
             loss.backward()
-            # nn.utils.clip_grad.clip_grad_value_(model.parameters(), hp.clip_value)
+            nn.utils.clip_grad.clip_grad_value_(model.parameters(), hp.clip_value)
             optimizer.step()
             trn_epoch_loss.append(loss.item())
             if i == hp.num_steps:
@@ -328,8 +329,8 @@ def main(args: Namespace):
         with torch.no_grad():
             for i, (vmessages, vtargets) in enumerate(valid_dataloader):
                 voutputs = model(vmessages)
-                vloss = criterion(voutputs, vtargets.long())
-                val_epoch_loss.append(vloss.item())
+                vloss = lcriterion(voutputs, vtargets.long())
+                val_epoch_loss.append(vloss.median().item())
                 fit_metrics = fit(voutputs, vtargets)
                 val_epoch_acc.append(fit_metrics.acc)
                 val_epoch_f1.append(fit_metrics.f1)

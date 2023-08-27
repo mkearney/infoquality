@@ -227,9 +227,9 @@ def main(args: Namespace):
             label: idx for idx, label in enumerate(train_df["label"].unique().sort())
         }
 
-    logger.info("__nobs__", train=train_df.shape[0])
-    logger.info("__nobs__", valid=valid_df.shape[0])
-    logger.info("__nobs__", test=test_df.shape[0])
+    logger.info("_nobs_", train=train_df.shape[0])
+    logger.info("_nobs_", valid=valid_df.shape[0])
+    logger.info("_nobs_", test=test_df.shape[0])
     train_data = MessagesDataset(
         messages=train_df["text"].to_list(),
         labels=train_df["label"].to_list(),
@@ -297,7 +297,7 @@ def main(args: Namespace):
     metrics, best_metric_value = Metrics(), float("inf")
     best_epoch, best_state_dict = 0, model.state_dict()
     start_time = datetime.now()
-    logger.info("__init__", time=start_time.strftime("%Y-%m-%d %H:%M:%S"))
+    logger.info("_init_", time=start_time.strftime("%Y-%m-%d %H:%M:%S"))
     early_stopping_counter = 0
 
     for epoch in range(hp.num_epochs):
@@ -330,7 +330,10 @@ def main(args: Namespace):
             for i, (vmessages, vtargets) in enumerate(valid_dataloader):
                 voutputs = model(vmessages)
                 vloss = lcriterion(voutputs, vtargets.long())
-                val_epoch_loss.append(vloss.median().item())
+                # drop high and low
+                vloss = vloss[vloss != vloss.max()]
+                vloss = vloss[vloss != vloss.min()]
+                val_epoch_loss.append(vloss.mean().item())
                 fit_metrics = fit(voutputs, vtargets)
                 val_epoch_acc.append(fit_metrics.acc)
                 val_epoch_f1.append(fit_metrics.f1)
@@ -371,10 +374,9 @@ def main(args: Namespace):
         epoch_metrics_logging = {
             k: f"{v:.4f}" for k, v in epoch_metrics_logging.items()
         }
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        logger.info(
-            now, __ep=f"{epoch:3d}", __lr=f"{epoch_lr:.5f}", **epoch_metrics_logging
-        )
+        epp = f"{epoch:2d}"
+        epp = f"{epp:^6}".replace(" ", "_")
+        logger.info(f"{epp}", __lr=f"{epoch_lr:.5f}", **epoch_metrics_logging)
 
         # --------------------------------------------------------------
         # track best epoch

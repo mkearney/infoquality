@@ -4,7 +4,7 @@ import structlog
 
 # default configuration + whatever adjustments i list here:
 # * pad_event: padding for event defaults to 30. i prefer smaller.
-ped_event = 12
+ped_event = 7
 
 # console_renderer = structlog.dev.ConsoleRenderer(pad_event=ped_event)
 # console_renderer._longest_level
@@ -14,7 +14,7 @@ structlog.configure(
         structlog.processors.add_log_level,
         structlog.processors.StackInfoRenderer(),
         structlog.dev.set_exc_info,
-        structlog.processors.TimeStamper(fmt="%Y-%m-%d %H:%M:%S"),
+        structlog.processors.TimeStamper(fmt="%Y-%m-%d %H:%M:%S", utc=False),
         structlog.dev.ConsoleRenderer(pad_event=ped_event),
     ],
     wrapper_class=structlog.make_filtering_bound_logger(logging.NOTSET),

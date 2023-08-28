@@ -227,6 +227,14 @@ def main(args: Namespace):
             label: idx for idx, label in enumerate(train_df["label"].unique().sort())
         }
 
+    # -------------------------------------------------------------------
+    # HYPERPARAMETERS, PREPROCESSOR, & DATA
+    # -------------------------------------------------------------------
+    hp = get_hyperparameters_from_args(args)
+    for k, v in hp.__dict__.items():
+        logger.info("__hp__", **{k: v})
+    preprocessor = Preprocessor(max_len=hp.max_len)
+
     logger.info("_nobs_", train=train_df.shape[0])
     logger.info("_nobs_", valid=valid_df.shape[0])
     logger.info("_nobs_", test=test_df.shape[0])
@@ -234,29 +242,24 @@ def main(args: Namespace):
         messages=train_df["text"].to_list(),
         labels=train_df["label"].to_list(),
         label_map=label_map,
+        preprocessor=preprocessor,
     )
     valid_data = MessagesDataset(
         messages=valid_df["text"].to_list(),
         labels=valid_df["label"].to_list(),
         label_map=label_map,
+        preprocessor=preprocessor,
     )
     test_data = MessagesDataset(
         messages=test_df["text"].to_list(),
         labels=test_df["label"].to_list(),
         label_map=label_map,
+        preprocessor=preprocessor,
     )
-
-    # -------------------------------------------------------------------
-    # HYPERPARAMETERS
-    # -------------------------------------------------------------------
-    hp = get_hyperparameters_from_args(args)
-    for k, v in hp.__dict__.items():
-        logger.info("__hp__", **{k: v})
 
     # -------------------------------------------------------------------
     # HYPERPARAMETERS & MODEL COMPONENTS
     # -------------------------------------------------------------------
-    preprocessor = Preprocessor(max_len=hp.max_len)
     embeddings = (
         bert_embeddings[:, : hp.embedding_dimensions]  # noqa # type: ignore
         .detach()
@@ -268,7 +271,11 @@ def main(args: Namespace):
         hyperparameters=hp,
         label_map=label_map,
     )
-    optimizer = optim.AdamW(model.parameters(), lr=hp.lr)
+    optimizer = optim.AdamW(
+        model.parameters(),
+        lr=hp.lr,
+        eps=1e-8,
+    )  # type: ignore
     lr_scheduler = ReduceLROnPlateau(
         optimizer,
         mode="min",
@@ -277,7 +284,6 @@ def main(args: Namespace):
         verbose=False,
     )
     criterion = nn.CrossEntropyLoss()
-    lcriterion = nn.CrossEntropyLoss(reduction="none")
     train_dataloader = DataLoader(train_data, batch_size=hp.batch_size, shuffle=True)
     valid_dataloader = DataLoader(valid_data, batch_size=hp.batch_size, shuffle=True)
     test_dataloader = DataLoader(test_data, batch_size=hp.batch_size, shuffle=True)
@@ -289,13 +295,13 @@ def main(args: Namespace):
     output_dir = Path("/Users/mwk/models/").joinpath(hp.name)
     # create output directory if it doesn't exist
     output_dir.mkdir(parents=True, exist_ok=True)
-    saver = ModelSaver(str(output_dir), version=model.version)
+    saver = ModelSaver(str(output_dir), version=model.version)  # type: ignore
 
     # -------------------------------------------------------------------
     # TRAINING LOOOP
     # -------------------------------------------------------------------
     metrics, best_metric_value = Metrics(), float("inf")
-    best_epoch, best_state_dict = 0, model.state_dict()
+    best_epoch, best_state_dict = 0, model.state_dict()  # type: ignore
     start_time = datetime.now()
     logger.info("_init_", time=start_time.strftime("%Y-%m-%d %H:%M:%S"))
     early_stopping_counter = 0
@@ -309,14 +315,16 @@ def main(args: Namespace):
         # --------------------------------------------------------------
         # training steps
         # --------------------------------------------------------------
-        model.train()
+        model.train()  # type: ignore
 
         for i, (messages, targets) in enumerate(train_dataloader):
             optimizer.zero_grad()
-            outputs = model(messages)
+            outputs = model(messages)  # type: ignore
             loss = criterion(outputs, targets.long())
             loss.backward()
-            nn.utils.clip_grad.clip_grad_value_(model.parameters(), hp.clip_value)
+            nn.utils.clip_grad.clip_grad_value_(
+                model.parameters(), hp.clip_value  # type: ignore
+            )
             optimizer.step()
             trn_epoch_loss.append(loss.item())
             if i == hp.num_steps:
@@ -325,15 +333,13 @@ def main(args: Namespace):
         # --------------------------------------------------------------
         # validation steps
         # --------------------------------------------------------------
-        model.eval()
+        model.eval()  # type: ignore
         with torch.no_grad():
             for i, (vmessages, vtargets) in enumerate(valid_dataloader):
-                voutputs = model(vmessages)
-                vloss = lcriterion(voutputs, vtargets.long())
+                voutputs = model(vmessages)  # type: ignore
+                vloss = criterion(voutputs, vtargets.long())
                 # drop high and low
-                vloss = vloss[vloss != vloss.max()]
-                vloss = vloss[vloss != vloss.min()]
-                val_epoch_loss.append(vloss.mean().item())
+                val_epoch_loss.append(vloss.item())
                 fit_metrics = fit(voutputs, vtargets)
                 val_epoch_acc.append(fit_metrics.acc)
                 val_epoch_f1.append(fit_metrics.f1)
@@ -384,7 +390,7 @@ def main(args: Namespace):
         if val_epoch_loss_stat < best_metric_value:
             best_metric_value = val_epoch_loss_stat
             best_epoch = epoch
-            best_state_dict = model.state_dict()
+            best_state_dict = model.state_dict()  # type: ignore
             early_stopping_counter = 0
         else:
             early_stopping_counter += 1
@@ -423,7 +429,7 @@ def main(args: Namespace):
     with torch.no_grad():
         test_loss, acc, f1s, prs, rcs = [], [], [], [], []
         for i, (tmessages, ttargets) in enumerate(test_dataloader):
-            toutputs = model(tmessages)
+            toutputs = model(tmessages)  # type: ignore
             tloss = criterion(toutputs, ttargets.long())
             fit_metrics = fit(toutputs, ttargets)
             acc.append(fit_metrics.acc)
@@ -448,11 +454,14 @@ def main(args: Namespace):
     # ------------------------------------------------------------------
     # saving metadata
     # ------------------------------------------------------------------
-    saved_as = metrics.save("/Users/mwk/models/meta", model.version)
+    saved_as = metrics.save(
+        "/Users/mwk/models/meta",
+        model.version,  # type: ignore
+    )
     hyperparameters_path = save_hypers(
         params=model.hyperparameters.__dict__,
         output_dir="/Users/mwk/models/meta",
-        version=model.version,
+        version=model.version,  # type: ignore
     )
     logger.info("__metadata__", hyperparameters=hyperparameters_path)
     logger.info("__metadata__", metrics=saved_as)
@@ -468,7 +477,7 @@ def main(args: Namespace):
         msgs = batch_messages(submission["text"].to_list(), hp.batch_size)
         preds = []
         for batch in msgs:
-            preds.extend(model(batch).argmax(1).tolist())
+            preds.extend(model(batch).argmax(1).tolist())  # type: ignore
         revlabelmap = {v: k for k, v in label_map.items()}
         labels = pl.Series([revlabelmap[i] for i in preds])
         ids = pl.read_parquet(
@@ -481,8 +490,8 @@ def main(args: Namespace):
         # -------------------------------------------------------------------
         # SAVE MODEL
         # -------------------------------------------------------------------
-        model.load_state_dict(best_state_dict)
-        model.eval()
+        model.load_state_dict(best_state_dict)  # type: ignore
+        model.eval()  # type: ignore
         metrics_path = saver.save_metrics(metrics.__dict__)
         embeddings_path = saver.save_embeddings(model)
         state_dict_path = saver.save_state_dict(model)

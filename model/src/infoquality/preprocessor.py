@@ -1,7 +1,9 @@
+import string
 from collections import defaultdict
-from typing import List
+from typing import List, Union
 
-from infoquality.artifacts import bert_model, bert_token_map, tokenizer
+import torch
+from infoquality.artifacts import bert_token_map, tokenizer
 
 
 class Preprocessor:
@@ -15,13 +17,23 @@ class Preprocessor:
         self.token_map.update(bert_token_map)
         self.tokenizer = tokenizer
 
-    def one(self, message: str) -> List[int]:
+    def rm_punct(self, message: str) -> str:
+        return message.translate(str.maketrans("", "", string.punctuation))
+
+    def one_str(self, message: str) -> List[int]:
+        message = self.rm_punct(message)
         return self.tokenizer.encode(
             message,
             truncation=True,
             max_length=self.max_len,
             add_special_tokens=True,
+            padding="max_length",
         )
 
-    def __call__(self, messages: List[str]) -> List[List[int]]:
-        return [self.one(message) for message in messages]
+    def one(self, x: Union[str, List[int]]) -> List[int]:
+        return self.one_str(x) if isinstance(x, str) else x
+
+    def __call__(self, messages: Union[List[List[int]], List[str]]) -> torch.Tensor:
+        return torch.tensor(
+            [self.one(message) for message in messages], dtype=torch.long
+        )

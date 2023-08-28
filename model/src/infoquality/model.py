@@ -1,6 +1,6 @@
 import math
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 
 import torch
 import torch.nn as nn
@@ -12,23 +12,16 @@ from infoquality.preprocessor import Preprocessor
 class PositionalEncoding(nn.Module):
     def __init__(self, embedding_dimensions, max_len):
         super().__init__()
-        # (max_len, embedding_dimensions)
-        pos_encoding = torch.zeros(max_len, embedding_dimensions)
-        # (max_len, 1)
-        positions_list = torch.arange(0, max_len, dtype=torch.float).view(-1, 1)
-        # (embedding_dimensions / 2)
-        division_term = torch.exp(
-            torch.arange(0, embedding_dimensions, 2).float()
-            * (-math.log(10000.0))
-            / embedding_dimensions
+        position = torch.arange(0, max_len, dtype=torch.float32).unsqueeze(1)
+        div_term = torch.exp(
+            torch.arange(0, embedding_dimensions, 2, dtype=torch.float32)
+            * (-math.log(10000.0) / embedding_dimensions)
         )
-        # (max_len, embedding_dimensions / 2) – columns 0, 2, 4...
-        pos_encoding[:, 0::2] = torch.sin(positions_list * division_term)
-        # (max_len, embedding_dimensions / 2) – columns 1, 3, 5...
-        pos_encoding[:, 1::2] = torch.cos(positions_list * division_term)
-        # (1, max_len, embedding_dimensions)
-        pos_encoding = pos_encoding.unsqueeze(0)
-        self.register_buffer("pos_encoding", pos_encoding)
+        pe = torch.zeros(max_len, embedding_dimensions)
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        pe = pe.unsqueeze(0)
+        self.register_buffer("pos_encoding", pe)
 
     def forward(self, token_embedding: torch.Tensor) -> torch.Tensor:
         return (
@@ -94,13 +87,15 @@ class Model(nn.Module):
             self.hyperparameters.num_classes * 3, self.hyperparameters.num_classes
         )
 
-    def as_tensors(self, messages: List[str]) -> List[torch.Tensor]:
+    def as_tensors(
+        self, messages: Union[List[List[int]], List[str]]
+    ) -> List[torch.Tensor]:
         return [
             torch.tensor(indices, dtype=torch.long)
             for indices in self.preprocessor(messages)
         ]
 
-    def forward(self, messages: List[str]) -> torch.Tensor:
+    def forward(self, messages: Union[List[List[int]], List[str]]) -> torch.Tensor:
         indices = self.as_tensors(messages)
         padded = torch.nn.utils.rnn.pad_sequence(
             indices, batch_first=True, padding_value=self.preprocessor.pad_idx

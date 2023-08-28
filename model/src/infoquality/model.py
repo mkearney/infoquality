@@ -95,10 +95,10 @@ class Model(nn.Module):
             for indices in self.preprocessor(messages)
         ]
 
-    def forward(self, messages: Union[List[List[int]], List[str]]) -> torch.Tensor:
-        indices = self.as_tensors(messages)
+    def forward(self, messages: List[torch.Tensor]) -> torch.Tensor:
+        # indices = self.preprocessor(messages)
         padded = torch.nn.utils.rnn.pad_sequence(
-            indices, batch_first=True, padding_value=self.preprocessor.pad_idx
+            messages, batch_first=True, padding_value=self.preprocessor.pad_idx
         )
         embedded = self.embedding(padded)
         if self.hyperparameters.dropout > 0:

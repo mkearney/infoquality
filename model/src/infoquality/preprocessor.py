@@ -33,7 +33,9 @@ class Preprocessor:
     def one(self, x: Union[str, List[int]]) -> List[int]:
         return self.one_str(x) if isinstance(x, str) else x
 
-    def __call__(self, messages: Union[List[List[int]], List[str]]) -> torch.Tensor:
-        return torch.tensor(
-            [self.one(message) for message in messages], dtype=torch.long
-        )
+    def __call__(
+        self, messages: Union[List[List[int]], List[str]]
+    ) -> List[torch.Tensor]:
+        return [
+            torch.tensor(self.one(message), dtype=torch.long) for message in messages
+        ]

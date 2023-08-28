@@ -1,5 +1,6 @@
 from typing import Dict, List
 
+import torch
 from infoquality.preprocessor import Preprocessor
 from torch.utils.data import Dataset
 
@@ -13,7 +14,7 @@ class MessagesDataset(Dataset):
         preprocessor: Preprocessor,
     ):
         self.messages = messages
-        self.indices = preprocessor(messages)
+        self.indices: List[torch.Tensor] = preprocessor(messages)
         self.labels = labels
         self.targets = [label_map[label] for label in self.labels]
 

@@ -477,7 +477,8 @@ def main(args: Namespace):
         msgs = batch_messages(submission["text"].to_list(), hp.batch_size)
         preds = []
         for batch in msgs:
-            preds.extend(model(batch).argmax(1).tolist())  # type: ignore
+            indices = model.preprocessor(batch)
+            preds.extend(model(indices).argmax(1).tolist())  # type: ignore
         revlabelmap = {v: k for k, v in label_map.items()}
         labels = pl.Series([revlabelmap[i] for i in preds])
         ids = pl.read_parquet(

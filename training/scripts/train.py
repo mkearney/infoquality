@@ -9,9 +9,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from datasets import load_dataset
-from infoquality.artifacts import bert_embeddings
 from infoquality.hyperparameters import HyperParameters
-from infoquality.preprocessor import Preprocessor
 from infoquality.save import ModelSaver
 from infoquality.utils import get_logger
 from pydantic import BaseModel
@@ -174,6 +172,8 @@ def parse_args() -> Namespace:
 
 def main(args: Namespace):
     logger = get_logger(args.version, args.name)
+    start_time = datetime.now()
+    logger.info("_init_", time=start_time.strftime("%Y-%m-%d %H:%M:%S"))
     # -------------------------------------------------------------------
     # DATASETS: INFO QUALLITY
     # -------------------------------------------------------------------
@@ -233,7 +233,8 @@ def main(args: Namespace):
     hp = get_hyperparameters_from_args(args)
     for k, v in hp.__dict__.items():
         logger.info("__hp__", **{k: v})
-    preprocessor = Preprocessor(max_len=hp.max_len)
+
+    # preprocessor = Preprocessor(max_len=hp.max_len)
 
     logger.info("_nobs_", train=train_df.shape[0])
     logger.info("_nobs_", valid=valid_df.shape[0])
@@ -242,37 +243,25 @@ def main(args: Namespace):
         messages=train_df["text"].to_list(),
         labels=train_df["label"].to_list(),
         label_map=label_map,
-        preprocessor=preprocessor,
     )
     valid_data = MessagesDataset(
         messages=valid_df["text"].to_list(),
         labels=valid_df["label"].to_list(),
         label_map=label_map,
-        preprocessor=preprocessor,
     )
     test_data = MessagesDataset(
         messages=test_df["text"].to_list(),
         labels=test_df["label"].to_list(),
         label_map=label_map,
-        preprocessor=preprocessor,
     )
 
     # -------------------------------------------------------------------
     # HYPERPARAMETERS & MODEL COMPONENTS
     # -------------------------------------------------------------------
-    embeddings = (
-        bert_embeddings[:, : hp.embedding_dimensions]  # noqa # type: ignore
-        .detach()
-        .clone()
-    )
-    model = Model(
-        preprocessor=preprocessor,
-        embeddings=embeddings,
-        hyperparameters=hp,
-        label_map=label_map,
-    )
+    model = Model(hyperparameters=hp)
+
     optimizer = optim.AdamW(
-        model.parameters(),
+        model.model.parameters(),  # type: ignore
         lr=hp.lr,
         eps=1e-8,
     )  # type: ignore
@@ -301,9 +290,7 @@ def main(args: Namespace):
     # TRAINING LOOOP
     # -------------------------------------------------------------------
     metrics, best_metric_value = Metrics(), float("inf")
-    best_epoch, best_state_dict = 0, model.state_dict()  # type: ignore
-    start_time = datetime.now()
-    logger.info("_init_", time=start_time.strftime("%Y-%m-%d %H:%M:%S"))
+    best_epoch, best_state_dict = 0, model.model.state_dict()  # type: ignore
     early_stopping_counter = 0
 
     for epoch in range(hp.num_epochs):
@@ -315,16 +302,17 @@ def main(args: Namespace):
         # --------------------------------------------------------------
         # training steps
         # --------------------------------------------------------------
-        model.train()  # type: ignore
+        model.model.train()  # type: ignore
 
         for i, (messages, targets) in enumerate(train_dataloader):
             optimizer.zero_grad()
             outputs = model(messages)  # type: ignore
             loss = criterion(outputs, targets.long())
             loss.backward()
-            nn.utils.clip_grad.clip_grad_value_(
-                model.parameters(), hp.clip_value  # type: ignore
-            )
+            if hp.clip_value > 0:
+                nn.utils.clip_grad.clip_grad_value_(
+                    model.model.parameters(), hp.clip_value  # type: ignore
+                )
             optimizer.step()
             trn_epoch_loss.append(loss.item())
             if i == hp.num_steps:
@@ -333,7 +321,7 @@ def main(args: Namespace):
         # --------------------------------------------------------------
         # validation steps
         # --------------------------------------------------------------
-        model.eval()  # type: ignore
+        model.model.eval()  # type: ignore
         with torch.no_grad():
             for i, (vmessages, vtargets) in enumerate(valid_dataloader):
                 voutputs = model(vmessages)  # type: ignore
@@ -390,7 +378,7 @@ def main(args: Namespace):
         if val_epoch_loss_stat < best_metric_value:
             best_metric_value = val_epoch_loss_stat
             best_epoch = epoch
-            best_state_dict = model.state_dict()  # type: ignore
+            best_state_dict = model.model.state_dict()  # type: ignore
             early_stopping_counter = 0
         else:
             early_stopping_counter += 1
@@ -422,6 +410,20 @@ def main(args: Namespace):
         metric=hp.best_metric,
         value=f"{best_metric_value:.4f}",
     )
+
+    # -------------------------------------------------------------------
+    # SAVE MODEL
+    # -------------------------------------------------------------------
+    model.model.load_state_dict(best_state_dict)  # type: ignore
+    model.model.eval()  # type: ignore
+    metrics_path = saver.save_metrics(metrics.__dict__)
+    # embeddings_path = saver.save_embeddings(model.model)
+    # state_dict_path = saver.save_state_dict(model.model)
+    # hyperparameters_path = saver.save_hyperparameters(model.model)
+    logger.info("__save__", metrics=metrics_path)
+    # logger.info("__save__", embeddings=embeddings_path)
+    # logger.info("__save__", state_dict=state_dict_path)
+    # logger.info("__save__", hyperparameters=hyperparameters_path)
 
     # -------------------------------------------------------------------
     # TEST SET
@@ -458,12 +460,12 @@ def main(args: Namespace):
         "/Users/mwk/models/meta",
         model.version,  # type: ignore
     )
-    hyperparameters_path = save_hypers(
-        params=model.hyperparameters.__dict__,
-        output_dir="/Users/mwk/models/meta",
-        version=model.version,  # type: ignore
-    )
-    logger.info("__metadata__", hyperparameters=hyperparameters_path)
+    # hyperparameters_path = save_hypers(
+    #     params=model.hyperparameters.__dict__,
+    #     output_dir="/Users/mwk/models/meta",
+    #     version=model.version,  # type: ignore
+    # )
+    # logger.info("__metadata__", hyperparameters=hyperparameters_path)
     logger.info("__metadata__", metrics=saved_as)
 
     # ------------------------------------------------------------------
@@ -476,31 +478,18 @@ def main(args: Namespace):
         )
         msgs = batch_messages(submission["text"].to_list(), hp.batch_size)
         preds = []
-        for batch in msgs:
-            indices = model.preprocessor(batch)
-            preds.extend(model(indices).argmax(1).tolist())  # type: ignore
-        revlabelmap = {v: k for k, v in label_map.items()}
-        labels = pl.Series([revlabelmap[i] for i in preds])
-        ids = pl.read_parquet(
-            "/Users/mwk/data/movie-genre-prediction/submission-ids.parquet"
-        )
-        filename = datetime.now().strftime("submission-labeled-%Y%m%d%H%M%S.csv")
-        ids.with_columns(genre=labels).write_csv(
-            f"/Users/mwk/data/movie-genre-prediction/{filename}"
-        )
-        # -------------------------------------------------------------------
-        # SAVE MODEL
-        # -------------------------------------------------------------------
-        model.load_state_dict(best_state_dict)  # type: ignore
-        model.eval()  # type: ignore
-        metrics_path = saver.save_metrics(metrics.__dict__)
-        embeddings_path = saver.save_embeddings(model)
-        state_dict_path = saver.save_state_dict(model)
-        hyperparameters_path = saver.save_hyperparameters(model)
-        logger.info("__save__", metrics=metrics_path)
-        logger.info("__save__", embeddings=embeddings_path)
-        logger.info("__save__", state_dict=state_dict_path)
-        logger.info("__save__", hyperparameters=hyperparameters_path)
+        with torch.no_grad():
+            for batch in msgs:
+                preds.extend(model(batch).argmax(1).tolist())  # type: ignore
+            revlabelmap = {v: k for k, v in label_map.items()}
+            labels = pl.Series([revlabelmap[i] for i in preds])
+            ids = pl.read_parquet(
+                "/Users/mwk/data/movie-genre-prediction/submission-ids.parquet"
+            )
+            filename = datetime.now().strftime("submission-labeled-%Y%m%d%H%M%S.csv")
+            ids.with_columns(genre=labels).write_csv(
+                f"/Users/mwk/data/movie-genre-prediction/{filename}"
+            )
 
     else:
         logger.info("test_acc < 0.33 skipping submission & not saving model...")

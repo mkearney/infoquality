@@ -18,7 +18,7 @@ class ModelSaver:
 
     def save_embeddings(self, model: Model) -> str:
         torch.save(
-            model.embedding.weight,
+            model.model.embedding.weight,  # type: ignore
             path := os.path.join(self.path, "embeddings.pt"),
         )
         return path

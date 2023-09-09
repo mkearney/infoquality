@@ -29,21 +29,16 @@ class Conductor:
 conductor = Conductor()
 
 conductor(
-    batch_size=16,
+    batch_size=64,
+    dropout=0.15,
     clip_value=0,
-    early_stopping_patience=6,
+    early_stopping_patience=9,
     gamma=0.67,
-    lr=1e-4,
-    lr_patience=1,
-    max_len=70,
+    lr=2e-4,
+    lr_patience=0,
+    max_len=80,
     name="moviegenre",
     num_classes=10,
-    num_epochs=16,
-    num_steps=32,
+    num_epochs=32,
+    num_steps=64,
 )
-
-# activation="gelu",
-# dropout=0.5,
-# embedding_dimensions=256,
-# num_heads=8,
-# num_layers=2,

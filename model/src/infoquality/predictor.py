@@ -4,7 +4,6 @@ from typing import Generator, List, Union
 
 import torch
 from infoquality.hyperparameters import HyperParameters
-from infoquality.preprocessor import Preprocessor
 from pydantic import BaseModel
 
 from infoquality.model import Model
@@ -56,13 +55,7 @@ class Predictor:
 def load_model(path: Path) -> Model:
     with path.joinpath("hyperparameters.json").open("r") as f:
         hp = HyperParameters(**json.load(f))
-    preprocessor = Preprocessor(max_len=hp.max_len)
-    embeddings = torch.load(path.joinpath("embeddings.pt"))
-    model = Model(
-        preprocessor=preprocessor,
-        embeddings=embeddings,
-        hyperparameters=hp,
-    )
+    model = Model(hyperparameters=hp)
     state_dict = torch.load(path.joinpath("state_dict.pt"))
     model.load_state_dict(state_dict)
     model.eval()

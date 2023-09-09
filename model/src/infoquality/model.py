@@ -1,25 +1,39 @@
 import json
 import math
 from datetime import datetime
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import torch
 import torch.nn as nn
 from infoquality.hyperparameters import HyperParameters
 from transformers import AutoTokenizer, DistilBertForSequenceClassification, logging
 
-# x = "This is a test sentence."
-
 
 class Model(nn.Module):
     def __init__(
-        self, hyperparameters: HyperParameters, model: str = "distilbert-base-uncased"
+        self,
+        hyperparameters: HyperParameters,
+        model: str = "distilbert-base-uncased",
+        label_map: Optional[Dict[str, int]] = None,
     ):
         super(Model, self).__init__()
+        self.version = datetime.now().strftime(
+            f"{self.hyperparameters.version}.%Y%m%d%H%M%S"
+        )
+        if label_map:
+            self.label_map = label_map
+        else:
+            self.label_map: Dict[str, int] = {
+                str(i): i for i in range(self.hyperparameters.num_classes)
+            }
+
         logging.set_verbosity_error()
         self.tokenizer = AutoTokenizer.from_pretrained(model)
         self.model = DistilBertForSequenceClassification.from_pretrained(
-            model, num_labels=10, use_safetensors=True
+            model,
+            num_labels=hyperparameters.num_classes,
+            use_safetensors=True,
+            seq_classif_dropout=hyperparameters.dropout,
         )
         self.hp = hyperparameters
         self.max_len = hyperparameters.max_len
@@ -69,70 +83,3 @@ class PositionalEncoding(nn.Module):
                 0, : token_embedding.size(1), :  # type: ignore
             ]
         )
-
-
-# class Model(nn.Module):
-#     def __init__(
-#         self,
-#         preprocessor: Preprocessor,
-#         hyperparameters: HyperParameters,
-#         label_map: Optional[Dict[str, int]] = None,
-#     ):
-#         super(Model, self).__init__()
-#         self.hyperparameters = hyperparameters
-#         self.name = self.hyperparameters.name
-#         self.version = datetime.now().strftime(
-#             f"{self.hyperparameters.version}.%Y%m%d%H%M%S"
-#         )
-#         if not label_map:
-#             self.label_map: Dict[str, int] = {
-#                 str(i): i for i in range(self.hyperparameters.num_classes)
-#             }
-#         self.preprocessor: Preprocessor = preprocessor
-#         self.embeddings: torch.Tensor = embeddings.detach().clone()
-#         self.embedding_dimensions: int = self.embeddings.shape[1]
-#         hidden_dim = self.embedding_dimensions
-#         self.embedding = nn.Embedding.from_pretrained(
-#             self.embeddings,
-#             freeze=False,
-#             padding_idx=self.preprocessor.tokenizer.unk_token_id,
-#         )
-#         self.dropout = nn.Dropout(self.hyperparameters.dropout)
-#         self.layer_norm = nn.LayerNorm(self.embedding_dimensions)
-#         self.gru = nn.GRU(
-#             input_size=self.embedding_dimensions,
-#             hidden_size=hidden_dim,
-#             num_layers=self.hyperparameters.num_layers,
-#             batch_first=True,
-#             dropout=self.hyperparameters.dropout,
-#             bidirectional=True,
-#         )
-#         self.fc = nn.Linear(
-#             self.embedding_dimensions * 2 * 3, self.hyperparameters.num_classes
-#         )
-
-#     def as_tensors(
-#         self, messages: Union[List[List[int]], List[str]]
-#     ) -> List[torch.Tensor]:
-#         return [
-#             torch.tensor(indices, dtype=torch.long)
-#             for indices in self.preprocessor(messages)
-#         ]
-
-#     def forward(self, messages: List[torch.Tensor]) -> torch.Tensor:
-#         padded = torch.nn.utils.rnn.pad_sequence(
-#             messages,
-#             batch_first=True,
-#         )
-#         embedded = self.embedding(padded)
-#         if self.hyperparameters.dropout > 0:
-#             embedded = self.dropout(embedded)
-#         embedded = self.layer_norm(embedded)
-#         # gru
-#         output, _ = self.gru(embedded)
-#         output = output.permute(0, 2, 1)
-#         avg_pooled = F.adaptive_avg_pool1d(output, 1).view(output.size(0), -1)
-#         max_pooled = F.adaptive_max_pool1d(output, 1).view(output.size(0), -1)
-#         std_pooled = output.std(dim=-1)
-#         pooled = torch.cat([avg_pooled, max_pooled, std_pooled], dim=1)
-#         return self.fc(pooled)

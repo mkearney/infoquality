@@ -476,7 +476,7 @@ def main(args: Namespace):
         submission = pl.read_parquet(
             "/Users/mwk/data/movie-genre-prediction/submission-unlabeled.parquet"
         )
-        msgs = batch_messages(submission["text"].to_list(), hp.batch_size)
+        msgs = batch_messages(submission["text"].to_list(), hp.batch_size * 2)
         preds = []
         with torch.no_grad():
             for batch in msgs:

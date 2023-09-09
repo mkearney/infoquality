@@ -6,8 +6,6 @@ import structlog
 # * pad_event: padding for event defaults to 30. i prefer smaller.
 ped_event = 7
 
-# console_renderer = structlog.dev.ConsoleRenderer(pad_event=ped_event)
-# console_renderer._longest_level
 structlog.configure(
     processors=[
         structlog.contextvars.merge_contextvars,

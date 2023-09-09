@@ -18,13 +18,13 @@ class Model(nn.Module):
     ):
         super(Model, self).__init__()
         self.version = datetime.now().strftime(
-            f"{self.hyperparameters.version}.%Y%m%d%H%M%S"
+            f"{hyperparameters.version}.%Y%m%d%H%M%S"
         )
         if label_map:
             self.label_map = label_map
         else:
             self.label_map: Dict[str, int] = {
-                str(i): i for i in range(self.hyperparameters.num_classes)
+                str(i): i for i in range(hyperparameters.num_classes)
             }
 
         logging.set_verbosity_error()

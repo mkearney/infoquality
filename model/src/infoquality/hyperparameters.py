@@ -24,4 +24,3 @@ class HyperParameters(BaseModel):
     early_stopping_patience: int = 5
     lr_patience: int = 2
     best_metric: str = "loss"
-    version: str = "0.1.0"

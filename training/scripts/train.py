@@ -2,129 +2,34 @@ import json
 from argparse import ArgumentParser, Namespace
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, Generator, List, Union
 
 import polars as pl
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from common.metrics import Fit, Metrics
 from datasets import load_dataset
 from infoquality.hyperparameters import HyperParameters
 from infoquality.save import ModelSaver
 from infoquality.utils import get_logger
-from pydantic import BaseModel
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
-from torchmetrics import Accuracy, F1Score, Precision, Recall
 
 from infoquality.data import MessagesDataset
 from infoquality.model import Model
 
 
-def batch_messages(messages: List[str], batch_size: int) -> List[List[str]]:
-    batches = []
+def batch_messages(
+    messages: List[str], batch_size: int
+) -> Generator[List[str], None, None]:
     for i in range(0, len(messages), batch_size):
-        batches.append(messages[i : i + batch_size])  # noqa
-    return batches
+        yield messages[i : i + batch_size]  # noqa
 
 
-class FitStatistics(BaseModel):
-    acc: float
-    f1: float
-    pr: float
-    rc: float
-
-
-class Fit:
-    def __init__(
-        self, num_classes: int, task: str = "multiclass", average: str = "macro"
-    ):
-        self.num_classes = num_classes
-        self.average = average
-        self.task = task
-        self.accuracy = Accuracy(
-            task=self.task,  # type: ignore
-            num_classes=num_classes,
-            average=self.average,  # type: ignore
-        )
-        self.f1_score = F1Score(
-            task=self.task,  # type: ignore
-            num_classes=num_classes,
-            average=self.average,  # type: ignore
-        )
-        self.precision = Precision(
-            task=self.task,  # type: ignore
-            num_classes=num_classes,
-            average=self.average,  # type: ignore
-        )
-        self.recall = Recall(
-            task=self.task,  # type: ignore
-            num_classes=num_classes,
-            average=self.average,  # type: ignore
-        )
-
-    def __call__(self, output, target) -> FitStatistics:
-        return FitStatistics(
-            acc=self.accuracy(output, target),
-            f1=self.f1_score(output, target),
-            pr=self.precision(output, target),
-            rc=self.recall(output, target),
-        )
-
-
-class EpochMetrics(BaseModel):
-    epoch: int
-    loss: float
-    val_loss: float
-    val_acc: float
-    val_f1: float
-
-
-class Metrics:
-    metrics: List[EpochMetrics] = []
-
-    def collect(self) -> Dict[str, List[float]]:
-        return {
-            "epoch": self.epoch(),
-            "loss": self.loss(),
-            "val_loss": self.val_loss(),
-            "val_acc": self.val_acc(),
-            "val_f1": self.val_f1(),
-        }
-
-    def epoch(self) -> List[float]:
-        return [float(m.epoch) for m in self.metrics]
-
-    def loss(self) -> List[float]:
-        return [m.loss for m in self.metrics]
-
-    def val_loss(self) -> List[float]:
-        return [m.val_loss for m in self.metrics]
-
-    def val_acc(self) -> List[float]:
-        return [m.val_acc for m in self.metrics]
-
-    def val_f1(self) -> List[float]:
-        return [m.val_f1 for m in self.metrics]
-
-    def append(self, epoch: int, metrics: Dict[str, float]) -> None:
-        epoch_metrics = EpochMetrics(epoch=epoch, **metrics)
-        self.metrics.append(epoch_metrics)
-
-    def save(
-        self,
-        output_dir: str,
-        version: str = "",
-    ) -> str:
-        version = "" if version == "" else f"-{version}"
-        save_as = f"{output_dir}/metrics{version}.json"
-        data = self.collect()
-        with open(save_as, "w") as f:
-            json.dump(data, f, indent=2)
-        return save_as
-
-
-def save_hypers(params: dict, output_dir: str, version: str) -> str:
+def save_hypers(
+    params: Dict[str, Union[str, int, float]], output_dir: str, version: str
+) -> str:
     version = "" if version == "" else f"-{version}"
     save_as = f"{output_dir}/hyperparameters{version}.json"
     with open(save_as, "w") as f:
@@ -224,14 +129,8 @@ def main(args: Namespace):
         }
 
     # -------------------------------------------------------------------
-    # HYPERPARAMETERS, PREPROCESSOR, & DATA
+    # MESSAGES DATASETS
     # -------------------------------------------------------------------
-    hp = get_hyperparameters_from_args(args)
-    for k, v in hp.__dict__.items():
-        logger.info("__hp__", **{k: v})
-
-    # preprocessor = Preprocessor(max_len=hp.max_len)
-
     logger.info("_nobs_", train=train_df.shape[0])
     logger.info("_nobs_", valid=valid_df.shape[0])
     logger.info("_nobs_", test=test_df.shape[0])
@@ -252,10 +151,16 @@ def main(args: Namespace):
     )
 
     # -------------------------------------------------------------------
-    # HYPERPARAMETERS & MODEL COMPONENTS
+    # HYPERPARAMETERS
+    # -------------------------------------------------------------------
+    hp = get_hyperparameters_from_args(args)
+    for k, v in hp.__dict__.items():
+        logger.info("__hp__", **{k: v})
+
+    # -------------------------------------------------------------------
+    # HYPERPARAMETERS & TRAIN COMPONENTS
     # -------------------------------------------------------------------
     model = Model(hyperparameters=hp)
-
     optimizer = optim.AdamW(
         model.model.parameters(),  # type: ignore
         lr=hp.lr,

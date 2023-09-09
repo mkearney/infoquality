@@ -1,5 +1,5 @@
 import json
-import os
+from pathlib import Path
 from typing import Any, Dict
 
 import torch
@@ -13,26 +13,29 @@ class ModelSaver:
         path: str,
         version: str,
     ):
-        self.path = f"{path}/{version}"
-        os.mkdir(self.path)
+        self.path = Path(path).joinpath(version)
+        self.path.mkdir()
 
     def save_embeddings(self, model: Model) -> str:
         torch.save(
             model.model.embedding.weight,  # type: ignore
-            path := os.path.join(self.path, "embeddings.pt"),
+            path := str(self.path.joinpath("embeddings.pt")),
         )
         return path
 
     def save_state_dict(self, model: Model) -> str:
-        torch.save(model.state_dict(), path := os.path.join(self.path, "state_dict.pt"))
+        torch.save(
+            model.state_dict(),
+            path := str(self.path.joinpath("state_dict.pt")),
+        )
         return path
 
     def save_hyperparameters(self, model: Model) -> str:
-        with open(path := os.path.join(self.path, "hyperparameters.json"), "w") as f:
+        with open(path := str(self.path.joinpath("hyperparameters.json")), "w") as f:
             json.dump(model.hyperparameters.__dict__, f)
         return path
 
     def save_metrics(self, metrics: Dict[str, Any]) -> str:
-        with open(path := os.path.join(self.path, "metrics.json"), "w") as f:
+        with open(path := str(self.path.joinpath("metrics.json")), "w") as f:
             json.dump(metrics, f)
         return path

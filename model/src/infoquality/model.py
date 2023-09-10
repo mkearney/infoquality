@@ -1,5 +1,3 @@
-import json
-import math
 from datetime import datetime
 from typing import Dict, List, Optional
 
@@ -31,9 +29,9 @@ class Model(nn.Module):
         self.tokenizer = AutoTokenizer.from_pretrained(model)
         self.model = DistilBertForSequenceClassification.from_pretrained(
             model,
-            num_labels=hyperparameters.num_classes,
-            use_safetensors=True,
-            seq_classif_dropout=hyperparameters.dropout,
+            num_labels=hyperparameters.num_classes,  # type: ignore
+            use_safetensors=True,  # type: ignore
+            seq_classif_dropout=hyperparameters.dropout,  # type: ignore
         )
         self.hp = hyperparameters
         self.max_len = hyperparameters.max_len
@@ -54,32 +52,3 @@ class Model(nn.Module):
         inputs = self.preprocess(messages)
         outputs = self.model(**inputs)  # type: ignore
         return outputs.logits
-
-
-with open("/Users/mwk/data/kmw-dbcr-token-map.json", "r") as f:
-    token_map = json.load(f)
-
-embeddings = torch.load("/Users/mwk/data/kmw-dbcr-embeddings.pt")
-
-
-class PositionalEncoding(nn.Module):
-    def __init__(self, embedding_dimensions, max_len):
-        super().__init__()
-        position = torch.arange(0, max_len, dtype=torch.float32).unsqueeze(1)
-        div_term = torch.exp(
-            torch.arange(0, embedding_dimensions, 2, dtype=torch.float32)
-            * (-math.log(10000.0) / embedding_dimensions)
-        )
-        pe = torch.zeros(max_len, embedding_dimensions)
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
-        pe = pe.unsqueeze(0)
-        self.register_buffer("pos_encoding", pe)
-
-    def forward(self, token_embedding: torch.Tensor) -> torch.Tensor:
-        return (
-            token_embedding
-            + self.pos_encoding[  # type: ignore
-                0, : token_embedding.size(1), :  # type: ignore
-            ]
-        )

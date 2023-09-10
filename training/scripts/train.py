@@ -1,16 +1,14 @@
-import json
 from argparse import ArgumentParser, Namespace
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Generator, List, Union
 
 import polars as pl
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from common.metrics import Fit, Metrics
+from common.utils import batch_messages, get_hyperparameters_from_args, save_hypers
 from datasets import load_dataset
-from infoquality.hyperparameters import HyperParameters
 from infoquality.save import ModelSaver
 from infoquality.utils import get_logger
 from torch.optim.lr_scheduler import ReduceLROnPlateau
@@ -20,49 +18,22 @@ from infoquality.data import MessagesDataset
 from infoquality.model import Model
 
 
-def batch_messages(
-    messages: List[str], batch_size: int
-) -> Generator[List[str], None, None]:
-    for i in range(0, len(messages), batch_size):
-        yield messages[i : i + batch_size]  # noqa
-
-
-def save_hypers(
-    params: Dict[str, Union[str, int, float]], output_dir: str, version: str
-) -> str:
-    version = "" if version == "" else f"-{version}"
-    save_as = f"{output_dir}/hyperparameters{version}.json"
-    with open(save_as, "w") as f:
-        json.dump(params, f, indent=2)
-    return save_as
-
-
-def get_hyperparameters_from_args(args: Namespace) -> HyperParameters:
-    d = args.__dict__
-    kwargs = {
-        k: v
-        for k, v in d.items()
-        if k in HyperParameters.model_fields and v is not None
-    }
-    return HyperParameters(**kwargs)
-
-
 def get_parser() -> ArgumentParser:
     parser = ArgumentParser()
+    parser.add_argument("--batch-size", type=int)
+    parser.add_argument("--best-metric", type=str)
+    parser.add_argument("--clip-value", type=float)
+    parser.add_argument("--dropout", type=float)
+    parser.add_argument("--early-stopping-patience", type=int)
+    parser.add_argument("--gamma", type=float)
+    parser.add_argument("--lr-patience", type=int)
+    parser.add_argument("--lr", type=float)
+    parser.add_argument("--max-len", type=int)
+    parser.add_argument("--name", type=str)
+    parser.add_argument("--num-classes", type=int)
     parser.add_argument("--num-epochs", type=int)
     parser.add_argument("--num-steps", type=int)
-    parser.add_argument("--batch-size", type=int)
-    parser.add_argument("--dropout", type=float)
-    parser.add_argument("--lr", type=float)
-    parser.add_argument("--gamma", type=float)
-    parser.add_argument("--max-len", type=int)
-    parser.add_argument("--num-classes", type=int)
-    parser.add_argument("--clip-value", type=float)
     parser.add_argument("--version", type=str)
-    parser.add_argument("--name", type=str)
-    parser.add_argument("--early-stopping-patience", type=int)
-    parser.add_argument("--lr-patience", type=int)
-    parser.add_argument("--best-metric", type=str)
     return parser
 
 
@@ -168,7 +139,7 @@ def main(args: Namespace):
     )  # type: ignore
     lr_scheduler = ReduceLROnPlateau(
         optimizer,
-        mode="min",
+        mode="min" if hp.best_metric == "loss" else "max",
         factor=hp.gamma,
         patience=hp.lr_patience,
         verbose=False,
@@ -190,7 +161,9 @@ def main(args: Namespace):
     # -------------------------------------------------------------------
     # TRAINING LOOOP
     # -------------------------------------------------------------------
-    metrics, best_metric_value = Metrics(), float("inf")
+    metrics = Metrics()
+    best_metric_value = float("inf")
+    best_metric_value *= 1 if hp.best_metric == "loss" else -1
     best_epoch, best_state_dict = 0, model.model.state_dict()  # type: ignore
     early_stopping_counter = 0
 
@@ -206,7 +179,6 @@ def main(args: Namespace):
         model.model.train()  # type: ignore
 
         for i, (messages, targets) in enumerate(train_dataloader):
-            optimizer.zero_grad()
             outputs = model(messages)  # type: ignore
             loss = criterion(outputs, targets.long())
             loss.backward()
@@ -215,6 +187,7 @@ def main(args: Namespace):
                     model.model.parameters(), hp.clip_value  # type: ignore
                 )
             optimizer.step()
+            optimizer.zero_grad()
             trn_epoch_loss.append(loss.item())
             if i == hp.num_steps:
                 break
@@ -318,13 +291,11 @@ def main(args: Namespace):
     model.model.load_state_dict(best_state_dict)  # type: ignore
     model.model.eval()  # type: ignore
     metrics_path = saver.save_metrics(metrics.__dict__)
-    # embeddings_path = saver.save_embeddings(model.model)
-    # state_dict_path = saver.save_state_dict(model.model)
-    # hyperparameters_path = saver.save_hyperparameters(model.model)
+    state_dict_path = saver.save_state_dict(model)
+    hyperparameters_path = saver.save_hyperparameters(model)
     logger.info("__save__", metrics=metrics_path)
-    # logger.info("__save__", embeddings=embeddings_path)
-    # logger.info("__save__", state_dict=state_dict_path)
-    # logger.info("__save__", hyperparameters=hyperparameters_path)
+    logger.info("__save__", state_dict=state_dict_path)
+    logger.info("__save__", hyperparameters=hyperparameters_path)
 
     # -------------------------------------------------------------------
     # TEST SET
@@ -361,12 +332,12 @@ def main(args: Namespace):
         "/Users/mwk/models/meta",
         model.version,  # type: ignore
     )
-    # hyperparameters_path = save_hypers(
-    #     params=model.hyperparameters.__dict__,
-    #     output_dir="/Users/mwk/models/meta",
-    #     version=model.version,  # type: ignore
-    # )
-    # logger.info("__metadata__", hyperparameters=hyperparameters_path)
+    hyperparameters_path = save_hypers(
+        params=model.hyperparameters.__dict__,
+        output_dir="/Users/mwk/models/meta",
+        version=model.version,  # type: ignore
+    )
+    logger.info("__metadata__", hyperparameters=hyperparameters_path)
     logger.info("__metadata__", metrics=saved_as)
 
     # ------------------------------------------------------------------
@@ -377,13 +348,13 @@ def main(args: Namespace):
         submission = pl.read_parquet(
             "/Users/mwk/data/movie-genre-prediction/submission-unlabeled.parquet"
         )
-        msgs = batch_messages(submission["text"].to_list(), hp.batch_size * 2)
+        msgs = batch_messages(submission["text"].to_list(), hp.batch_size)
+        revlabelmap = {v: k for k, v in label_map.items()}
         preds = []
         with torch.no_grad():
             for batch in msgs:
-                preds.extend(model(batch).argmax(1).tolist())  # type: ignore
-            revlabelmap = {v: k for k, v in label_map.items()}
-            labels = pl.Series([revlabelmap[i] for i in preds])
+                preds.extend([revlabelmap[i.item()] for i in model(batch).argmax(1)])
+            labels = pl.Series(preds)
             ids = pl.read_parquet(
                 "/Users/mwk/data/movie-genre-prediction/submission-ids.parquet"
             )

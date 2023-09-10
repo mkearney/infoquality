@@ -36,9 +36,9 @@ conductor(
     gamma=0.8,
     lr=2e-4,
     lr_patience=0,
-    max_len=15,
+    max_len=23,
     name="moviegenre",
     num_classes=10,
     num_epochs=16,
-    num_steps=8,
+    num_steps=64,
 )

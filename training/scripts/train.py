@@ -333,7 +333,7 @@ def main(args: Namespace):
         model.version,  # type: ignore
     )
     hyperparameters_path = save_hypers(
-        params=model.hyperparameters.__dict__,
+        params=model.hp.__dict__,
         output_dir="/Users/mwk/models/meta",
         version=model.version,  # type: ignore
     )

@@ -96,7 +96,9 @@ def main(args: Namespace):
     else:
         train_df = pl.read_parquet(
             "/Users/mwk/data/movie-genre-prediction/train.parquet"
-        ).sample(fraction=args.fraction, shuffle=True)
+        )
+        if args.fraction > 0:
+            train_df = train_df.sample(fraction=args.fraction, shuffle=True)
         valid_df = pl.read_parquet(
             "/Users/mwk/data/movie-genre-prediction/valid.parquet"
         )

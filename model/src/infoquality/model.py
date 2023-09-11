@@ -9,12 +9,9 @@ from transformers import (
     AutoTokenizer,
     BertForSequenceClassification,
     DebertaForSequenceClassification,
-    DebertaV2ForSequenceClassification,
     DistilBertForSequenceClassification,
-    FunnelForSequenceClassification,
     RobertaForSequenceClassification,
     SqueezeBertForSequenceClassification,
-    XLMRobertaForSequenceClassification,
     logging,
 )
 
@@ -38,7 +35,14 @@ class Model(nn.Module):
 
         logging.set_verbosity_error()
         self.tokenizer = AutoTokenizer.from_pretrained(hyperparameters.model)
-        if hyperparameters.model.startswith("bert-"):
+        if hyperparameters.model.startswith("albert-base-v2"):
+            self.model = AlbertForSequenceClassification.from_pretrained(
+                hyperparameters.model,
+                num_labels=hyperparameters.num_classes,  # type: ignore
+                use_safetensors=True,  # type: ignore
+                # hidden_dropout_prob=hyperparameters.dropout,  # type: ignore
+            )
+        elif hyperparameters.model.startswith("bert-"):
             self.model = BertForSequenceClassification.from_pretrained(
                 hyperparameters.model,
                 num_labels=hyperparameters.num_classes,  # type: ignore
@@ -66,33 +70,12 @@ class Model(nn.Module):
                 hidden_dropout_prob=hyperparameters.dropout,  # type: ignore
                 ignore_mismatched_sizes=True,
             )
-        elif hyperparameters.model.startswith("xlm-roberta-"):
-            self.model = XLMRobertaForSequenceClassification.from_pretrained(
-                hyperparameters.model,
-                num_labels=hyperparameters.num_classes,  # type: ignore
-                use_safetensors=True,  # type: ignore
-                hidden_dropout_prob=hyperparameters.dropout,  # type: ignore
-            )
         elif hyperparameters.model.startswith("squeezebert"):
             self.model = SqueezeBertForSequenceClassification.from_pretrained(
                 hyperparameters.model,
                 num_labels=hyperparameters.num_classes,  # type: ignore
                 # use_safetensors=True,  # type: ignore
                 hidden_dropout_prob=hyperparameters.dropout,  # type: ignore
-            )
-        elif hyperparameters.model.startswith("microsoft/deberta-v2"):
-            self.model = DebertaV2ForSequenceClassification.from_pretrained(
-                hyperparameters.model,
-                num_labels=hyperparameters.num_classes,  # type: ignore
-                # use_safetensors=True,  # type: ignore
-                hidden_dropout_prob=hyperparameters.dropout,  # type: ignore
-            )
-        elif hyperparameters.model.startswith("albert-base-v2"):
-            self.model = AlbertForSequenceClassification.from_pretrained(
-                hyperparameters.model,
-                num_labels=hyperparameters.num_classes,  # type: ignore
-                use_safetensors=True,  # type: ignore
-                # hidden_dropout_prob=hyperparameters.dropout,  # type: ignore
             )
         elif hyperparameters.model.startswith("microsoft/deberta-base"):
             self.model = DebertaForSequenceClassification.from_pretrained(
@@ -101,18 +84,14 @@ class Model(nn.Module):
                 # use_safetensors=True,  # type: ignore
                 hidden_dropout_prob=hyperparameters.dropout,  # type: ignore
             )
-        elif hyperparameters.model.startswith("funnel"):
-            self.model = FunnelForSequenceClassification.from_pretrained(
-                hyperparameters.model,
-                num_labels=hyperparameters.num_classes,  # type: ignore
-                use_safetensors=True,  # type: ignore
-                hidden_dropout=hyperparameters.dropout,  # type: ignore
-            )
 
         self.hp = hyperparameters
         self.max_len = hyperparameters.max_len
         self.version = datetime.now().strftime("0.0.1-%Y%m%d%H%M%S")
         logging.set_verbosity_warning()
+        self.linear = nn.Linear(
+            hyperparameters.num_classes + 1, hyperparameters.num_classes
+        )
 
     def preprocess(self, messages: List[str]) -> Dict[str, torch.Tensor]:
         return self.tokenizer(

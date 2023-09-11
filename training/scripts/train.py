@@ -29,6 +29,7 @@ def get_parser() -> ArgumentParser:
     parser.add_argument("--lr-patience", type=int)
     parser.add_argument("--lr", type=float)
     parser.add_argument("--max-len", type=int)
+    parser.add_argument("--model", type=str)
     parser.add_argument("--name", type=str)
     parser.add_argument("--num-classes", type=int)
     parser.add_argument("--num-epochs", type=int)

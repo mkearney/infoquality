@@ -28,17 +28,23 @@ class Conductor:
 
 conductor = Conductor()
 
+# "bert-base-uncased"
+# "distilbert-base-uncased"
+# "roberta-base"
+# "xlm-roberta-base"
+
 conductor(
     batch_size=128,
-    dropout=0.3,
-    clip_value=1,
-    early_stopping_patience=3,
+    dropout=0.2,
+    clip_value=0,
+    early_stopping_patience=4,
     gamma=0.8,
-    lr=2e-4,
+    lr=1e-5,
     lr_patience=0,
-    max_len=23,
+    max_len=50,
+    model="xlm-roberta-base",
     name="moviegenre",
     num_classes=10,
-    num_epochs=16,
-    num_steps=64,
+    num_epochs=32,
+    num_steps=32,
 )

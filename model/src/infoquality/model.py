@@ -4,14 +4,20 @@ from typing import Dict, List, Optional
 import torch
 import torch.nn as nn
 from infoquality.hyperparameters import HyperParameters
-from transformers import AutoTokenizer, DistilBertForSequenceClassification, logging
+from transformers import (
+    AutoTokenizer,
+    BertForSequenceClassification,
+    DistilBertForSequenceClassification,
+    RobertaForSequenceClassification,
+    XLMRobertaForSequenceClassification,
+    logging,
+)
 
 
 class Model(nn.Module):
     def __init__(
         self,
         hyperparameters: HyperParameters,
-        model: str = "distilbert-base-uncased",
         label_map: Optional[Dict[str, int]] = None,
     ):
         super(Model, self).__init__()
@@ -26,13 +32,36 @@ class Model(nn.Module):
             }
 
         logging.set_verbosity_error()
-        self.tokenizer = AutoTokenizer.from_pretrained(model)
-        self.model = DistilBertForSequenceClassification.from_pretrained(
-            model,
-            num_labels=hyperparameters.num_classes,  # type: ignore
-            use_safetensors=True,  # type: ignore
-            seq_classif_dropout=hyperparameters.dropout,  # type: ignore
-        )
+        self.tokenizer = AutoTokenizer.from_pretrained(hyperparameters.model)
+        if hyperparameters.model.startswith("bert-"):
+            self.model = BertForSequenceClassification.from_pretrained(
+                hyperparameters.model,
+                num_labels=hyperparameters.num_classes,  # type: ignore
+                use_safetensors=True,  # type: ignore
+                classifier_dropout=hyperparameters.dropout,  # type: ignore
+            )
+        elif hyperparameters.model.startswith("distilbert-"):
+            self.model = DistilBertForSequenceClassification.from_pretrained(
+                hyperparameters.model,
+                num_labels=hyperparameters.num_classes,  # type: ignore
+                use_safetensors=True,  # type: ignore
+                seq_classif_dropout=hyperparameters.dropout,  # type: ignore
+            )
+        elif hyperparameters.model.startswith("roberta-"):
+            self.model = RobertaForSequenceClassification.from_pretrained(
+                hyperparameters.model,
+                num_labels=hyperparameters.num_classes,  # type: ignore
+                use_safetensors=True,  # type: ignore
+                hidden_dropout_prob=hyperparameters.dropout,  # type: ignore
+            )
+        elif hyperparameters.model.startswith("xlm-roberta-"):
+            self.model = XLMRobertaForSequenceClassification.from_pretrained(
+                hyperparameters.model,
+                num_labels=hyperparameters.num_classes,  # type: ignore
+                use_safetensors=True,  # type: ignore
+                hidden_dropout_prob=hyperparameters.dropout,  # type: ignore
+            )
+
         self.hp = hyperparameters
         self.max_len = hyperparameters.max_len
         self.version = datetime.now().strftime("0.0.1-%Y%m%d%H%M%S")

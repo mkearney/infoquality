@@ -2,6 +2,7 @@ import json
 from argparse import Namespace
 from typing import Dict, Generator, List, Union
 
+import torch
 from infoquality.hyperparameters import HyperParameters
 
 
@@ -30,3 +31,20 @@ def get_hyperparameters_from_args(args: Namespace) -> HyperParameters:
         if k in HyperParameters.model_fields and v is not None
     }
     return HyperParameters(**kwargs)
+
+
+def model_size(model: torch.nn.Module) -> Dict[str, str]:
+    param_count = sum(param.numel() for param in model.parameters())
+    param_size = sum(
+        param.nelement() * param.element_size() for param in model.parameters()
+    )
+    buffer_count = sum(buffer.numel() for buffer in model.buffers())
+    buffer_size = sum(
+        buffer.nelement() * buffer.element_size() for buffer in model.buffers()
+    )
+    memory = (param_size + buffer_size) / 1024**2
+    parameters = param_count + buffer_count
+    return {
+        "parameters": f"{parameters:,}",
+        "memory": f"{memory:,.1f} MB",
+    }

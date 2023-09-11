@@ -7,7 +7,12 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from common.metrics import Fit, Metrics
-from common.utils import batch_messages, get_hyperparameters_from_args, save_hypers
+from common.utils import (
+    batch_messages,
+    get_hyperparameters_from_args,
+    model_size,
+    save_hypers,
+)
 from datasets import load_dataset
 from infoquality.save import ModelSaver
 from infoquality.utils import get_logger
@@ -25,6 +30,7 @@ def get_parser() -> ArgumentParser:
     parser.add_argument("--clip-value", type=float)
     parser.add_argument("--dropout", type=float)
     parser.add_argument("--early-stopping-patience", type=int)
+    parser.add_argument("--fraction", type=float)
     parser.add_argument("--gamma", type=float)
     parser.add_argument("--lr-patience", type=int)
     parser.add_argument("--lr", type=float)
@@ -90,7 +96,7 @@ def main(args: Namespace):
     else:
         train_df = pl.read_parquet(
             "/Users/mwk/data/movie-genre-prediction/train.parquet"
-        )
+        ).sample(fraction=args.fraction, shuffle=True)
         valid_df = pl.read_parquet(
             "/Users/mwk/data/movie-genre-prediction/valid.parquet"
         )
@@ -133,6 +139,7 @@ def main(args: Namespace):
     # HYPERPARAMETERS & TRAIN COMPONENTS
     # -------------------------------------------------------------------
     model = Model(hyperparameters=hp)
+    logger.info("_mdsz_", **model_size(model))
     optimizer = optim.AdamW(
         model.model.parameters(),  # type: ignore
         lr=hp.lr,
@@ -344,8 +351,8 @@ def main(args: Namespace):
     # ------------------------------------------------------------------
     # HF DATASET SUBMISSION
     # ------------------------------------------------------------------
-    if tacc > 0.33:
-        logger.info("test_acc > 0.33 generating submission & saving model...")
+    if tacc > 0.39:
+        logger.info("test_acc > 0.39 generating submission & saving model...")
         submission = pl.read_parquet(
             "/Users/mwk/data/movie-genre-prediction/submission-unlabeled.parquet"
         )
@@ -365,7 +372,7 @@ def main(args: Namespace):
             )
 
     else:
-        logger.info("test_acc < 0.33 skipping submission & not saving model...")
+        logger.info("test_acc < 0.39 skipping submission & not saving model...")
 
 
 if __name__ == "__main__":

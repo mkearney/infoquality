@@ -7,6 +7,7 @@ class HyperParameters(BaseModel):
     clip_value: float = 0.0
     dropout: float = 0.2
     early_stopping_patience: int = 4
+    fraction: float = 1.0
     gamma: float = 0.67
     lr_patience: int = 0
     lr: float = 2e-05

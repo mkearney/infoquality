@@ -5,10 +5,15 @@ import torch
 import torch.nn as nn
 from infoquality.hyperparameters import HyperParameters
 from transformers import (
+    AlbertForSequenceClassification,
     AutoTokenizer,
     BertForSequenceClassification,
+    DebertaForSequenceClassification,
+    DebertaV2ForSequenceClassification,
     DistilBertForSequenceClassification,
+    FunnelForSequenceClassification,
     RobertaForSequenceClassification,
+    SqueezeBertForSequenceClassification,
     XLMRobertaForSequenceClassification,
     logging,
 )
@@ -40,19 +45,26 @@ class Model(nn.Module):
                 use_safetensors=True,  # type: ignore
                 classifier_dropout=hyperparameters.dropout,  # type: ignore
             )
-        elif hyperparameters.model.startswith("distilbert-"):
+        elif hyperparameters.model.startswith(
+            "distilbert-"
+        ) or hyperparameters.model.startswith("distilgpt"):
             self.model = DistilBertForSequenceClassification.from_pretrained(
                 hyperparameters.model,
                 num_labels=hyperparameters.num_classes,  # type: ignore
                 use_safetensors=True,  # type: ignore
                 seq_classif_dropout=hyperparameters.dropout,  # type: ignore
             )
-        elif hyperparameters.model.startswith("roberta-"):
+            self.tokenizer.add_special_tokens({"pad_token": "[PAD]"})
+            self.model.resize_token_embeddings(len(self.tokenizer))  # type: ignore
+        elif hyperparameters.model.startswith(
+            "roberta-"
+        ) or hyperparameters.model.startswith("distilroberta-"):
             self.model = RobertaForSequenceClassification.from_pretrained(
                 hyperparameters.model,
                 num_labels=hyperparameters.num_classes,  # type: ignore
                 use_safetensors=True,  # type: ignore
                 hidden_dropout_prob=hyperparameters.dropout,  # type: ignore
+                ignore_mismatched_sizes=True,
             )
         elif hyperparameters.model.startswith("xlm-roberta-"):
             self.model = XLMRobertaForSequenceClassification.from_pretrained(
@@ -60,6 +72,41 @@ class Model(nn.Module):
                 num_labels=hyperparameters.num_classes,  # type: ignore
                 use_safetensors=True,  # type: ignore
                 hidden_dropout_prob=hyperparameters.dropout,  # type: ignore
+            )
+        elif hyperparameters.model.startswith("squeezebert"):
+            self.model = SqueezeBertForSequenceClassification.from_pretrained(
+                hyperparameters.model,
+                num_labels=hyperparameters.num_classes,  # type: ignore
+                # use_safetensors=True,  # type: ignore
+                hidden_dropout_prob=hyperparameters.dropout,  # type: ignore
+            )
+        elif hyperparameters.model.startswith("microsoft/deberta-v2"):
+            self.model = DebertaV2ForSequenceClassification.from_pretrained(
+                hyperparameters.model,
+                num_labels=hyperparameters.num_classes,  # type: ignore
+                # use_safetensors=True,  # type: ignore
+                hidden_dropout_prob=hyperparameters.dropout,  # type: ignore
+            )
+        elif hyperparameters.model.startswith("albert-base-v2"):
+            self.model = AlbertForSequenceClassification.from_pretrained(
+                hyperparameters.model,
+                num_labels=hyperparameters.num_classes,  # type: ignore
+                use_safetensors=True,  # type: ignore
+                # hidden_dropout_prob=hyperparameters.dropout,  # type: ignore
+            )
+        elif hyperparameters.model.startswith("microsoft/deberta-base"):
+            self.model = DebertaForSequenceClassification.from_pretrained(
+                hyperparameters.model,
+                num_labels=hyperparameters.num_classes,  # type: ignore
+                # use_safetensors=True,  # type: ignore
+                hidden_dropout_prob=hyperparameters.dropout,  # type: ignore
+            )
+        elif hyperparameters.model.startswith("funnel"):
+            self.model = FunnelForSequenceClassification.from_pretrained(
+                hyperparameters.model,
+                num_labels=hyperparameters.num_classes,  # type: ignore
+                use_safetensors=True,  # type: ignore
+                hidden_dropout=hyperparameters.dropout,  # type: ignore
             )
 
         self.hp = hyperparameters

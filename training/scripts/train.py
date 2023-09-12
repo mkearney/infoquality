@@ -1,6 +1,7 @@
 from argparse import ArgumentParser, Namespace
 from datetime import datetime
 from pathlib import Path
+from typing import List
 
 import polars as pl
 import torch
@@ -18,9 +19,16 @@ from infoquality.save import ModelSaver
 from infoquality.utils import get_logger
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
+from transformers import AutoTokenizer
 
 from infoquality.data import MessagesDataset
 from infoquality.model import Model
+
+len_tokenizer = AutoTokenizer.from_pretrained("distilbert-base-uncased")
+
+
+def count_tokens(messages: List[int]) -> List[int]:
+    return [len(len_tokenizer.encode(i)) for i in messages]  # type: ignore
 
 
 def get_parser() -> ArgumentParser:
@@ -30,10 +38,11 @@ def get_parser() -> ArgumentParser:
     parser.add_argument("--clip-value", type=float)
     parser.add_argument("--dropout", type=float)
     parser.add_argument("--early-stopping-patience", type=int)
-    parser.add_argument("--fraction", type=float)
+    parser.add_argument("--fraction", type=float, default=1.0)
     parser.add_argument("--gamma", type=float)
     parser.add_argument("--lr-patience", type=int)
     parser.add_argument("--lr", type=float)
+    parser.add_argument("--min-len", type=int, default=12)
     parser.add_argument("--max-len", type=int)
     parser.add_argument("--model", type=str)
     parser.add_argument("--name", type=str)
@@ -97,13 +106,22 @@ def main(args: Namespace):
         train_df = pl.read_parquet(
             "/Users/mwk/data/movie-genre-prediction/train.parquet"
         )
+        # for the trainset - use fraction (if < 1.0) to only use a subset
         if args.fraction > 0:
             train_df = train_df.sample(fraction=args.fraction, shuffle=True)
+        # and further limit the train set to observations with a minimum
+        # number of tokens – also filter out observations with lots of
+        # tokens because presumably we aren't capturing the full picture
+        # when we truncate those ones.
+        lens = pl.Series(count_tokens(train_df["text"].to_list()))
+        train_df = train_df.filter((lens > args.min_len) & (lens < 70))
+        # don't mess with validation/test datasets
         valid_df = pl.read_parquet(
             "/Users/mwk/data/movie-genre-prediction/valid.parquet"
         )
         test_df = pl.read_parquet("/Users/mwk/data/movie-genre-prediction/test.parquet")
 
+        # use sorted unique labels to create label map
         label_map = {
             label: idx for idx, label in enumerate(train_df["label"].unique().sort())
         }
@@ -114,6 +132,7 @@ def main(args: Namespace):
     logger.info("_nobs_", train=train_df.shape[0])
     logger.info("_nobs_", valid=valid_df.shape[0])
     logger.info("_nobs_", test=test_df.shape[0])
+
     train_data = MessagesDataset(
         messages=train_df["text"].to_list(),
         labels=train_df["label"].to_list(),
@@ -143,7 +162,7 @@ def main(args: Namespace):
     model = Model(hyperparameters=hp)
     logger.info("_mdsz_", **model_size(model))
     optimizer = optim.AdamW(
-        model.model.parameters(),  # type: ignore
+        model.parameters(),  # type: ignore
         lr=hp.lr,
         eps=1e-8,
     )  # type: ignore
@@ -174,7 +193,7 @@ def main(args: Namespace):
     metrics = Metrics()
     best_metric_value = float("inf")
     best_metric_value *= 1 if hp.best_metric == "loss" else -1
-    best_epoch, best_state_dict = 0, model.model.state_dict()  # type: ignore
+    best_epoch, best_state_dict = 0, model.state_dict()  # type: ignore
     early_stopping_counter = 0
 
     for epoch in range(hp.num_epochs):
@@ -186,7 +205,7 @@ def main(args: Namespace):
         # --------------------------------------------------------------
         # training steps
         # --------------------------------------------------------------
-        model.model.train()  # type: ignore
+        model.train()  # type: ignore
 
         for i, (messages, targets) in enumerate(train_dataloader):
             outputs = model(messages)  # type: ignore
@@ -194,7 +213,7 @@ def main(args: Namespace):
             loss.backward()
             if hp.clip_value > 0:
                 nn.utils.clip_grad.clip_grad_value_(
-                    model.model.parameters(), hp.clip_value  # type: ignore
+                    model.parameters(), hp.clip_value  # type: ignore
                 )
             optimizer.step()
             optimizer.zero_grad()
@@ -205,7 +224,7 @@ def main(args: Namespace):
         # --------------------------------------------------------------
         # validation steps
         # --------------------------------------------------------------
-        model.model.eval()  # type: ignore
+        model.eval()  # type: ignore
         with torch.no_grad():
             for i, (vmessages, vtargets) in enumerate(valid_dataloader):
                 voutputs = model(vmessages)  # type: ignore
@@ -262,7 +281,7 @@ def main(args: Namespace):
         if val_epoch_loss_stat < best_metric_value:
             best_metric_value = val_epoch_loss_stat
             best_epoch = epoch
-            best_state_dict = model.model.state_dict()  # type: ignore
+            best_state_dict = model.state_dict()  # type: ignore
             early_stopping_counter = 0
         else:
             early_stopping_counter += 1
@@ -298,8 +317,8 @@ def main(args: Namespace):
     # -------------------------------------------------------------------
     # SAVE MODEL
     # -------------------------------------------------------------------
-    model.model.load_state_dict(best_state_dict)  # type: ignore
-    model.model.eval()  # type: ignore
+    model.load_state_dict(best_state_dict)  # type: ignore
+    model.eval()  # type: ignore
     metrics_path = saver.save_metrics(metrics.__dict__)
     state_dict_path = saver.save_state_dict(model)
     hyperparameters_path = saver.save_hyperparameters(model)

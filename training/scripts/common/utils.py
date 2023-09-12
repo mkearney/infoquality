@@ -9,13 +9,36 @@ from infoquality.hyperparameters import HyperParameters
 def batch_messages(
     messages: List[str], batch_size: int
 ) -> Generator[List[str], None, None]:
+    """
+    Splits list of messages into batches of given size
+
+    ### Args:
+    * `messages`: A list of messages to split
+    * `batch_size`: Size of each batch
+
+    ### Returns:
+    * Generator of lists of messages each is the size of batch_size
+    """
     for i in range(0, len(messages), batch_size):
         yield messages[i : i + batch_size]  # noqa
 
 
 def save_hypers(
-    params: Dict[str, Union[str, int, float]], output_dir: str, version: str
+    params: Dict[str, Union[str, int, float]],
+    output_dir: str,
+    version: str,
 ) -> str:
+    """
+    Save hyperparameters to json file
+
+    ### Args:
+    * `params` A dictionary of parameters that will be saved
+    * `output_dir` The directory to save the model to
+    * `version` The version of the model to save
+
+    ### Returns:
+    * The name of the file
+    """
     version = "" if version == "" else f"-{version}"
     save_as = f"{output_dir}/hyperparameters{version}.json"
     with open(save_as, "w") as f:
@@ -24,6 +47,15 @@ def save_hypers(
 
 
 def get_hyperparameters_from_args(args: Namespace) -> HyperParameters:
+    """
+    Get hyperparameters from command line arguments
+
+    ### Args:
+    * `args` Command line arguments as returned by argparse
+
+    ### Returns:
+    * An instance of HyperParameters
+    """
     d = args.__dict__
     kwargs = {
         k: v
@@ -34,6 +66,16 @@ def get_hyperparameters_from_args(args: Namespace) -> HyperParameters:
 
 
 def model_size(model: torch.nn.Module) -> Dict[str, str]:
+    """
+    Returns information about the size of a model
+
+    ### Args:
+    * `model` nn.Module of interest
+
+    ### Returns:
+    * dictionary with "parameters" (the number of parameters) and
+        "memory" (the amount of memory used in MB)
+    """
     param_count = sum(param.numel() for param in model.parameters())
     param_size = sum(
         param.nelement() * param.element_size() for param in model.parameters()

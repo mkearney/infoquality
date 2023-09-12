@@ -40,13 +40,10 @@ class Model(nn.Module):
         self.tokenizer = AutoTokenizer.from_pretrained(hyperparameters.model)
         self.model = AutoModelForSequenceClassification.from_pretrained(
             hyperparameters.model,
-            num_labels=hyperparameters.num_classes * 3,
+            num_labels=hyperparameters.num_classes,
             hidden_dropout_prob=hyperparameters.dropout,
         )
         logging.set_verbosity_warning()
-        self.linear = nn.Linear(
-            hyperparameters.num_classes * 3, hyperparameters.num_classes
-        )
 
     def preprocess(self, messages: List[str]) -> Dict[str, torch.Tensor]:
         """
@@ -79,4 +76,4 @@ class Model(nn.Module):
         """
         inputs = self.preprocess(messages)
         outputs = self.model(**inputs)  # type: ignore
-        return self.linear(outputs.logits)
+        return outputs.logits

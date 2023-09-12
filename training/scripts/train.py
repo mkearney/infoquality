@@ -38,7 +38,9 @@ def get_parser() -> ArgumentParser:
     parser.add_argument("--model", type=str)
     parser.add_argument("--name", type=str)
     parser.add_argument("--num-classes", type=int)
+    parser.add_argument("--num-dims", type=int)
     parser.add_argument("--num-epochs", type=int)
+    parser.add_argument("--num-layers", type=int)
     parser.add_argument("--num-steps", type=int)
     parser.add_argument("--version", type=str)
     return parser
@@ -103,7 +105,7 @@ def main(args: Namespace):
         # for train/valid - sample fraction (if < 1.0) subset
         if args.fraction < 1.0:
             train_df = train_df.sample(fraction=args.fraction, shuffle=True)
-            valid_df = valid_df.sample(fraction=args.fraction, shuffle=True)
+            valid_df = valid_df.sample(fraction=(args.fraction + 1) / 2, shuffle=True)
 
         # keep test set as is either way
         test_df = pl.read_parquet("/Users/mwk/data/movie-genre-prediction/test.parquet")
@@ -182,6 +184,7 @@ def main(args: Namespace):
     best_metric_value *= 1 if hp.best_metric == "loss" else -1
     best_epoch, best_state_dict = 0, model.state_dict()  # type: ignore
     early_stopping_counter = 0
+    tacc, val_epoch_acc_stat = 0.0, 0.0
 
     for epoch in range(hp.num_epochs):
         trn_epoch_loss, val_epoch_loss = [], []
@@ -316,30 +319,31 @@ def main(args: Namespace):
     # -------------------------------------------------------------------
     # TEST SET
     # -------------------------------------------------------------------
-    with torch.no_grad():
-        test_loss, acc, f1s, prs, rcs = [], [], [], [], []
-        for i, (tmessages, ttargets) in enumerate(test_dataloader):
-            toutputs = model(tmessages)  # type: ignore
-            tloss = criterion(toutputs, ttargets.long())
-            fit_metrics = fit(toutputs, ttargets)
-            acc.append(fit_metrics.acc)
-            f1s.append(fit_metrics.f1)
-            prs.append(fit_metrics.pr)
-            rcs.append(fit_metrics.rc)
-            test_loss.append(tloss.item())
-        tacc = sum(acc) / len(acc)
-        tf1 = sum(f1s) / len(f1s)
-        tlss = sum(test_loss) / len(test_loss)
-        tpr = sum(prs) / len(prs)
-        trc = sum(rcs) / len(rcs)
-        logger.info(
-            "test",
-            loss=f"{tlss:.4f}",
-            acc=f"{tacc:.4f}",
-            f1=f"{tf1:.4f}",
-            pr=f"{tpr:.4f}",
-            rc=f"{trc:.4f}",
-        )
+    if val_epoch_acc_stat > 0.2:
+        with torch.no_grad():
+            test_loss, acc, f1s, prs, rcs = [], [], [], [], []
+            for i, (tmessages, ttargets) in enumerate(test_dataloader):
+                toutputs = model(tmessages)  # type: ignore
+                tloss = criterion(toutputs, ttargets.long())
+                fit_metrics = fit(toutputs, ttargets)
+                acc.append(fit_metrics.acc)
+                f1s.append(fit_metrics.f1)
+                prs.append(fit_metrics.pr)
+                rcs.append(fit_metrics.rc)
+                test_loss.append(tloss.item())
+            tacc = sum(acc) / len(acc)
+            tf1 = sum(f1s) / len(f1s)
+            tlss = sum(test_loss) / len(test_loss)
+            tpr = sum(prs) / len(prs)
+            trc = sum(rcs) / len(rcs)
+            logger.info(
+                "test",
+                loss=f"{tlss:.4f}",
+                acc=f"{tacc:.4f}",
+                f1=f"{tf1:.4f}",
+                pr=f"{tpr:.4f}",
+                rc=f"{trc:.4f}",
+            )
 
     # ------------------------------------------------------------------
     # saving metadata

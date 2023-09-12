@@ -37,7 +37,7 @@ There are a variety of models that can be fine tuned.
 | bert-base-cased                           |              |           |
 | bert-base-uncased                         |  109,490,954 |     417.7 |
 | distilroberta-base                        |   82,127,118 |     313.3 |
-| distilbert-base-cased                     |              |           |
+| distilbert-base-cased                     |   65,797,606 |     251.0 |
 | distilbert-base-multilingual-cased        |  135,332,874 |     516.3 |
 | distilbert-base-uncased                   |   66,961,674 |     255.4 |
 | distilbert-base-uncased-distilled-squad   |   66,961,674 |     255.4 |

@@ -17,14 +17,13 @@ make test
 ## Usage
 
 ```bash
-python scripts/train.py \
-    --num-epochs 16 \
-    --gamma 0.7 \
-    --num-steps 36 \
-    --lr 0.0002 \
-    --batch-size 36 \
-    --name imdbsent \
-    --embedding-dim 256
+.venv/bin/python scripts/train.py \
+    --num-epochs 32 \
+    --gamma 0.8 \
+    --num-steps 16 \
+    --lr 0.0001 \
+    --batch-size 128 \
+    --name imdbsent
 ```
 
 ## Training

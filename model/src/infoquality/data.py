@@ -4,6 +4,15 @@ from torch.utils.data import Dataset
 
 
 class MessagesDataset(Dataset):
+    """
+    Dataset for the messages.
+
+    ### Attributes
+        - `messages`: a list of messages
+        - `labels`: a list of labels
+        - `label_map`: a dictionary mapping labels to integers
+    """
+
     def __init__(
         self,
         messages: List[str],

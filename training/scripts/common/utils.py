@@ -13,11 +13,11 @@ def batch_messages(
     Splits list of messages into batches of given size
 
     ### Args:
-    * `messages`: A list of messages to split
-    * `batch_size`: Size of each batch
+        - `messages`: A list of messages to split
+        - `batch_size`: Size of each batch
 
     ### Returns:
-    * Generator of lists of messages each is the size of batch_size
+        - Generator of lists of messages each is the size of batch_size
     """
     for i in range(0, len(messages), batch_size):
         yield messages[i : i + batch_size]  # noqa
@@ -32,12 +32,12 @@ def save_hypers(
     Save hyperparameters to json file
 
     ### Args:
-    * `params` A dictionary of parameters that will be saved
-    * `output_dir` The directory to save the model to
-    * `version` The version of the model to save
+        - `params` A dictionary of parameters that will be saved
+        - `output_dir` The directory to save the model to
+        - `version` The version of the model to save
 
     ### Returns:
-    * The name of the file
+        - The name of the file
     """
     version = "" if version == "" else f"-{version}"
     save_as = f"{output_dir}/hyperparameters{version}.json"
@@ -51,10 +51,10 @@ def get_hyperparameters_from_args(args: Namespace) -> HyperParameters:
     Get hyperparameters from command line arguments
 
     ### Args:
-    * `args` Command line arguments as returned by argparse
+        - `args` Command line arguments as returned by argparse
 
     ### Returns:
-    * An instance of HyperParameters
+        - An instance of HyperParameters
     """
     d = args.__dict__
     kwargs = {
@@ -70,11 +70,11 @@ def model_size(model: torch.nn.Module) -> Dict[str, str]:
     Returns information about the size of a model
 
     ### Args:
-    * `model` nn.Module of interest
+        - `model` nn.Module of interest
 
     ### Returns:
-    * dictionary with "parameters" (the number of parameters) and
-        "memory" (the amount of memory used in MB)
+        - dictionary with "parameters" (the number of parameters) and
+            "memory" (the amount of memory used in MB)
     """
     param_count = sum(param.numel() for param in model.parameters())
     param_size = sum(

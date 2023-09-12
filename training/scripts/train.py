@@ -101,7 +101,7 @@ def main(args: Namespace):
             "/Users/mwk/data/movie-genre-prediction/valid.parquet"
         )
         # for train/valid - sample fraction (if < 1.0) subset
-        if args.fraction > 0:
+        if args.fraction < 1.0:
             train_df = train_df.sample(fraction=args.fraction, shuffle=True)
             valid_df = valid_df.sample(fraction=args.fraction, shuffle=True)
 
@@ -349,7 +349,7 @@ def main(args: Namespace):
         model.version,  # type: ignore
     )
     hyperparameters_path = save_hypers(
-        params=model.hp.__dict__,
+        params=model.hyperparameters.__dict__,
         output_dir="/Users/mwk/models/meta",
         version=model.version,  # type: ignore
     )

@@ -19,10 +19,10 @@ make test
 ```bash
 .venv/bin/python scripts/train.py \
     --num-epochs 32 \
-    --gamma 0.75 \
-    --num-steps 32 \
+    --gamma 0.8 \
+    --num-steps 16 \
     --lr 0.0001 \
-    --batch-size 64 \
+    --batch-size 128 \
     --name imdbsent
 ```
 
@@ -33,8 +33,9 @@ There are a variety of models that can be fine tuned.
 
 | pretrained_model                          |   parameters |   size_mb |
 |-------------------------------------------|-------------:|----------:|
-| albert-base-v2                            |    11,692,29 |      44.6 |
-| bert-base-cased                           |              |           |
+| albert-base-v2                            |   11,692,290 |      44.6 |
+| albert-large-v2                           |   17,716,052 |      67.6 |
+| bert-base-cased                           |  109,490,954 |     417.7 |
 | bert-base-uncased                         |  109,490,954 |     417.7 |
 | distilroberta-base                        |   82,127,118 |     313.3 |
 | distilbert-base-cased                     |   65,797,606 |     251.0 |

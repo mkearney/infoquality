@@ -5,24 +5,23 @@ class HyperParameters(BaseModel):
     """
     Hyperparameters for language model
 
-    Attributes:
-    ----------
-    batch_size: batch size for training
-    best_metric: metric to use for early stopping
-    clip_value: gradient clipping value - 0.0 means no clipping
-    dropout: dropout rate
-    early_stopping_patience: number of consecutive epochs without
-        improving best mark
-    gamma: discount factor
-    lr_patience: patience for learning rate scheduler
-    lr: learning rate
-    max_len: maximum length of a sequence
-    model: model to use
-    name: model name
-    num_classes: number of classes
-    num_epochs: number of epochs
-    num_steps: number of steps
-    version: model version
+    ### Attributes
+        - `batch_size`: batch size for training
+        - `best_metric`: metric to use for early stopping
+        - `clip_value`: gradient clipping value - 0.0 means no clipping
+        - `dropout`: dropout rate
+        - `early_stopping_patience`: number of consecutive epochs without
+            improving best mark
+        - `gamma`: discount factor
+        - `lr_patience`: patience for learning rate scheduler
+        - `lr`: learning rate
+        - `max_len`: maximum length of a sequence
+        - `model`: model to use
+        - `name`: model name
+        - `num_classes`: number of classes
+        - `num_epochs`: number of epochs
+        - `num_steps`: number of steps
+        - `version`: model version
     """
 
     batch_size: int = 64

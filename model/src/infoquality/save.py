@@ -8,6 +8,14 @@ from infoquality.model import Model
 
 
 class ModelSaver:
+    """
+    Saves pytorch model to disk.
+
+    ### Args:
+        - `path` (str): Path to save the model.
+        - `version` (str): Version of the model.
+    """
+
     def __init__(
         self,
         path: str,
@@ -25,7 +33,7 @@ class ModelSaver:
 
     def save_hyperparameters(self, model: Model) -> str:
         with open(path := str(self.path.joinpath("hyperparameters.json")), "w") as f:
-            json.dump(model.hp.__dict__, f)
+            json.dump(model.hyperparameters.__dict__, f)
         return path
 
     def save_metrics(self, metrics: Dict[str, Any]) -> str:

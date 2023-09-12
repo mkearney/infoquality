@@ -6,6 +6,16 @@ from torchmetrics import Accuracy, F1Score, Precision, Recall
 
 
 class FitStatistics(BaseModel):
+    """
+    Fit statistics.
+
+    ### Attributes
+        - `acc`: accuracy
+        - `f1`: f1 score
+        - `pr`: precision
+        - `rc`: recall
+    """
+
     acc: float
     f1: float
     pr: float
@@ -13,6 +23,15 @@ class FitStatistics(BaseModel):
 
 
 class Fit:
+    """
+    Fit class.
+
+    ### Args
+        - `num_classes`: number of classes
+        - `task`: task type
+        - `average`: how to average the metrics, i.e., "micro" or "macro"
+    """
+
     def __init__(
         self,
         num_classes: int,
@@ -53,6 +72,17 @@ class Fit:
 
 
 class EpochMetrics(BaseModel):
+    """
+    Metrics for a given epoch.
+
+    ### Attributes
+        - `epoch`: epoch number
+        - `loss`: training loss
+        - `val_loss`: validation loss
+        - `val_acc`: validation accuracy
+        - `val_f1`: validation F1 score
+    """
+
     epoch: int
     loss: float
     val_loss: float

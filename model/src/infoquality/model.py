@@ -1,32 +1,10 @@
 from datetime import datetime
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional
 
 import torch
 import torch.nn as nn
 from infoquality.hyperparameters import HyperParameters
-from pydantic import BaseModel, ConfigDict
-from transformers import (
-    AutoModelForSequenceClassification,
-    AutoTokenizer,
-    PreTrainedModel,
-    PreTrainedTokenizer,
-    PreTrainedTokenizerFast,
-    logging,
-)
-
-
-class PretrainedModel(BaseModel):
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-    tokenizer: Union[PreTrainedTokenizer, PreTrainedTokenizerFast]
-    model: PreTrainedModel
-
-    def __init__(self, model: str, **kwargs):
-        logging.set_verbosity_error()
-        super(PretrainedModel, self).__init__(
-            tokenizer=AutoTokenizer.from_pretrained(model),
-            model=AutoModelForSequenceClassification.from_pretrained(model, **kwargs),
-        )
-        logging.set_verbosity_warning()
+from transformers import AutoModelForSequenceClassification, AutoTokenizer, logging
 
 
 class Model(nn.Module):
@@ -58,13 +36,14 @@ class Model(nn.Module):
         self.max_len = hyperparameters.max_len
 
         # model architecture
-        pretrained_model = PretrainedModel(
+        logging.set_verbosity_error()
+        self.tokenizer = AutoTokenizer.from_pretrained(hyperparameters.model)
+        self.model = AutoModelForSequenceClassification.from_pretrained(
             hyperparameters.model,
             num_labels=hyperparameters.num_classes * 3,
             hidden_dropout_prob=hyperparameters.dropout,
         )
-        self.tokenizer = pretrained_model.tokenizer
-        self.model = pretrained_model.model
+        logging.set_verbosity_warning()
         self.linear = nn.Linear(
             hyperparameters.num_classes * 3, hyperparameters.num_classes
         )

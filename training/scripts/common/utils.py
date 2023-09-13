@@ -90,3 +90,18 @@ def model_size(model: torch.nn.Module) -> Dict[str, str]:
         "parameters": f"{parameters:,}",
         "memory": f"{memory:,.1f} MB",
     }
+
+
+def log_metrics(epoch: int, epoch_lr: float, metrics: Dict[str, float], logger) -> None:
+    epoch_metrics_logging = {
+        "_trn": metrics["loss"],
+        "_val": metrics["val_loss"],
+        "acc": metrics["val_acc"],
+        "f1": metrics["val_f1"],
+        "pr": metrics["val_pr"],
+        "rc": metrics["val_rc"],
+    }
+    epoch_metrics_logging = {k: f"{v:.4f}" for k, v in epoch_metrics_logging.items()}
+    epp = f"{epoch:2d}"
+    epp = f"{epp:^6}".replace(" ", "_")
+    logger.info(f"{epp}", __lr=f"{epoch_lr:.5f}", **epoch_metrics_logging)

@@ -10,6 +10,7 @@ from common.metrics import Fit, Metrics
 from common.utils import (
     batch_messages,
     get_hyperparameters_from_args,
+    log_metrics,
     model_size,
     save_hypers,
 )
@@ -27,7 +28,6 @@ def get_parser() -> ArgumentParser:
     parser = ArgumentParser()
     parser.add_argument("--batch-size", type=int)
     parser.add_argument("--best-metric", type=str)
-    parser.add_argument("--clip-value", type=float)
     parser.add_argument("--dropout", type=float)
     parser.add_argument("--early-stopping-patience", type=int)
     parser.add_argument("--fraction", type=float, default=1.0)
@@ -172,39 +172,34 @@ def main(args: Namespace):
     # SAVER
     # -------------------------------------------------------------------
     output_dir = Path("/Users/mwk/models/").joinpath(hp.name)
-    # create output directory if it doesn't exist
     output_dir.mkdir(parents=True, exist_ok=True)
-    saver = ModelSaver(str(output_dir), version=model.version)  # type: ignore
+    saver = ModelSaver(
+        str(output_dir), version=model.version, logger=logger
+    )  # type: ignore
 
     # -------------------------------------------------------------------
     # TRAINING LOOOP
     # -------------------------------------------------------------------
     metrics = Metrics()
-    best_metric_value = float("inf")
+    best_metric_value, best_acc_value = float("inf"), 0
     best_metric_value *= 1 if hp.best_metric == "loss" else -1
     best_epoch, best_state_dict = 0, model.state_dict()  # type: ignore
-    early_stopping_counter = 0
+    es_counter = 0
     tacc, val_epoch_acc_stat = 0.0, 0.0
 
     for epoch in range(hp.num_epochs):
-        trn_epoch_loss, val_epoch_loss = [], []
-        val_epoch_acc, val_epoch_f1 = [], []
-        val_epoch_pr, val_epoch_rc = [], []
         epoch_lr = optimizer.param_groups[0]["lr"]
 
         # --------------------------------------------------------------
         # training steps
         # --------------------------------------------------------------
+        trn_epoch_loss, val_epoch_loss = [], []
         model.train()  # type: ignore
 
         for i, (messages, targets) in enumerate(train_dataloader):
             outputs = model(messages)  # type: ignore
             loss = criterion(outputs, targets.long())
             loss.backward()
-            if hp.clip_value > 0:
-                nn.utils.clip_grad.clip_grad_value_(
-                    model.parameters(), hp.clip_value  # type: ignore
-                )
             optimizer.step()
             optimizer.zero_grad()
             trn_epoch_loss.append(loss.item())
@@ -214,12 +209,15 @@ def main(args: Namespace):
         # --------------------------------------------------------------
         # validation steps
         # --------------------------------------------------------------
+        val_epoch_acc, val_epoch_f1 = [], []
+        val_epoch_pr, val_epoch_rc = [], []
         model.eval()  # type: ignore
         with torch.no_grad():
+            # calculate mean loss
+            trn_epoch_loss_stat = sum(trn_epoch_loss) / len(trn_epoch_loss)
             for i, (vmessages, vtargets) in enumerate(valid_dataloader):
                 voutputs = model(vmessages)  # type: ignore
                 vloss = criterion(voutputs, vtargets.long())
-                # drop high and low
                 val_epoch_loss.append(vloss.item())
                 fit_metrics = fit(voutputs, vtargets)
                 val_epoch_acc.append(fit_metrics.acc)
@@ -228,16 +226,13 @@ def main(args: Namespace):
                 val_epoch_rc.append(fit_metrics.rc)
                 if i == hp.num_steps:
                     break
-
-        # --------------------------------------------------------------
-        # aggregate metrics
-        # --------------------------------------------------------------
-        trn_epoch_loss_stat = sum(trn_epoch_loss) / len(trn_epoch_loss)
-        val_epoch_loss_stat = sum(val_epoch_loss) / len(val_epoch_loss)
-        val_epoch_acc_stat = sum(val_epoch_acc) / len(val_epoch_acc)
-        val_epoch_f1_stat = sum(val_epoch_f1) / len(val_epoch_f1)
-        val_epoch_pr_stat = sum(val_epoch_pr) / len(val_epoch_pr)
-        val_epoch_rc_stat = sum(val_epoch_rc) / len(val_epoch_rc)
+        # calculate means
+        val_denom = len(val_epoch_loss)
+        val_epoch_loss_stat = sum(val_epoch_loss) / val_denom
+        val_epoch_acc_stat = sum(val_epoch_acc) / val_denom
+        val_epoch_f1_stat = sum(val_epoch_f1) / val_denom
+        val_epoch_pr_stat = sum(val_epoch_pr) / val_denom
+        val_epoch_rc_stat = sum(val_epoch_rc) / val_denom
         epoch_metrics = {
             "loss": trn_epoch_loss_stat,
             "val_loss": val_epoch_loss_stat,
@@ -247,39 +242,21 @@ def main(args: Namespace):
             "val_rc": val_epoch_rc_stat,
         }
         metrics.append(epoch=epoch, metrics=epoch_metrics)
-        # --------------------------------------------------------------
-        # metrics logging
-        # --------------------------------------------------------------
-        epoch_metrics_logging = {
-            "_trn": trn_epoch_loss_stat,
-            "_val": val_epoch_loss_stat,
-            "acc": val_epoch_acc_stat,
-            "f1": val_epoch_f1_stat,
-            "pr": val_epoch_pr_stat,
-            "rc": val_epoch_rc_stat,
-        }
-        epoch_metrics_logging = {
-            k: f"{v:.4f}" for k, v in epoch_metrics_logging.items()
-        }
-        epp = f"{epoch:2d}"
-        epp = f"{epp:^6}".replace(" ", "_")
-        logger.info(f"{epp}", __lr=f"{epoch_lr:.5f}", **epoch_metrics_logging)
+        log_metrics(epoch, epoch_lr, epoch_metrics, logger)
 
         # --------------------------------------------------------------
         # track best epoch
         # --------------------------------------------------------------
         if val_epoch_loss_stat < best_metric_value:
             best_metric_value = val_epoch_loss_stat
+            best_acc_value = val_epoch_acc_stat
             best_epoch = epoch
             best_state_dict = model.state_dict()  # type: ignore
-            early_stopping_counter = 0
+            es_counter = 0
         else:
-            early_stopping_counter += 1
-            if early_stopping_counter >= hp.early_stopping_patience:
-                logger.info(
-                    "__early_stopping__",
-                    early_stopping_counter=early_stopping_counter,
-                )
+            es_counter += 1
+            if es_counter >= hp.early_stopping_patience:
+                logger.info("__early_stopping__", es_counter=es_counter)
                 break
 
         lr_scheduler.step(val_epoch_loss_stat)
@@ -299,9 +276,10 @@ def main(args: Namespace):
     # ------------------------------------------------------------------
     logger.info(
         "best_metric",
-        epoch=best_epoch,
-        metric=hp.best_metric,
-        value=f"{best_metric_value:.4f}",
+        _epoch=best_epoch,
+        _metric=hp.best_metric,
+        _value=f"{best_metric_value:.4f}",
+        acc=f"{best_acc_value:.4f}",
     )
 
     # -------------------------------------------------------------------
@@ -309,12 +287,7 @@ def main(args: Namespace):
     # -------------------------------------------------------------------
     model.load_state_dict(best_state_dict)  # type: ignore
     model.eval()  # type: ignore
-    metrics_path = saver.save_metrics(metrics.__dict__)
-    state_dict_path = saver.save_state_dict(model)
-    hyperparameters_path = saver.save_hyperparameters(model)
-    logger.info("__save__", metrics=metrics_path)
-    logger.info("__save__", state_dict=state_dict_path)
-    logger.info("__save__", hyperparameters=hyperparameters_path)
+    saver.save(model, metrics.__dict__)
 
     # -------------------------------------------------------------------
     # TEST SET
@@ -322,7 +295,7 @@ def main(args: Namespace):
     if val_epoch_acc_stat > 0.2:
         with torch.no_grad():
             test_loss, acc, f1s, prs, rcs = [], [], [], [], []
-            for i, (tmessages, ttargets) in enumerate(test_dataloader):
+            for tmessages, ttargets in test_dataloader:
                 toutputs = model(tmessages)  # type: ignore
                 tloss = criterion(toutputs, ttargets.long())
                 fit_metrics = fit(toutputs, ttargets)
@@ -331,11 +304,12 @@ def main(args: Namespace):
                 prs.append(fit_metrics.pr)
                 rcs.append(fit_metrics.rc)
                 test_loss.append(tloss.item())
-            tacc = sum(acc) / len(acc)
-            tf1 = sum(f1s) / len(f1s)
-            tlss = sum(test_loss) / len(test_loss)
-            tpr = sum(prs) / len(prs)
-            trc = sum(rcs) / len(rcs)
+            denom = len(acc)
+            tacc = sum(acc) / denom
+            tf1 = sum(f1s) / denom
+            tlss = sum(test_loss) / denom
+            tpr = sum(prs) / denom
+            trc = sum(rcs) / denom
             logger.info(
                 "test",
                 loss=f"{tlss:.4f}",

@@ -30,13 +30,15 @@ class Conductor:
 conductor = Conductor()
 
 conductor(
-    batch_size=64,
-    dropout=0.35,
-    lr=2e-4,
-    max_len=50,
+    batch_size=256,
+    best_metric="acc",
+    dropout=0.5,
+    lr=3e-4,
+    early_stopping_patience=5,
+    max_len=60,
     model="distilbert-base-uncased",
     name="moviegenre",
     num_classes=10,
     num_epochs=62,
-    num_steps=16,
+    num_steps=4,
 )

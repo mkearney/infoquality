@@ -8,7 +8,6 @@ class HyperParameters(BaseModel):
     ### Attributes
         - `batch_size`: batch size for training
         - `best_metric`: metric to use for early stopping
-        - `clip_value`: gradient clipping value - 0.0 means no clipping
         - `dropout`: dropout rate
         - `early_stopping_patience`: number of consecutive epochs without
             improving best mark
@@ -28,7 +27,6 @@ class HyperParameters(BaseModel):
 
     batch_size: int = 64
     best_metric: str = "loss"
-    clip_value: float = 0.0
     dropout: float = 0.2
     early_stopping_patience: int = 4
     gamma: float = 0.8

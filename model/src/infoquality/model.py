@@ -140,7 +140,7 @@ class Model(nn.Module):
             padding="max_length",
         )  # type: ignore
 
-    def forward(self, messages: List[str]) -> torch.Tensor:
+    def forward_raw(self, messages: List[str]) -> torch.Tensor:
         """
         Forward pass of neural network
 
@@ -151,5 +151,23 @@ class Model(nn.Module):
             - Tensor of shape (batch_size, num_classes) containing output logits
         """
         inputs = self.preprocess(messages)
-        outputs = self.model(**inputs)  # type: ignore
+        return self.forward(**inputs)
+
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        targets: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """
+        Forward pass of neural network
+
+        ### Args
+            - `input_ids` Indices
+            - `attention_mask` Masks
+
+        ### Returns
+            - Tensor of shape (batch_size, num_classes) containing output logits
+        """
+        outputs = self.model(input_ids=input_ids, attention_mask=attention_mask)
         return outputs.logits

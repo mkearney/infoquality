@@ -6,6 +6,7 @@ import polars as pl
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from common.evaluate import evaluate
 from common.metrics import Fit, Metrics
 from common.utils import (
     batch_messages,
@@ -20,7 +21,7 @@ from infoquality.utils import get_logger
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
 
-from infoquality.data import MessagesDataset
+from infoquality.data import InputsDataset
 from infoquality.model import Model
 
 
@@ -116,38 +117,16 @@ def main(args: Namespace):
         }
 
     # -------------------------------------------------------------------
-    # MESSAGES DATASETS
+    # DATA SIZES, HYPERPARAMETERS, & TRAIN COMPONENTS
     # -------------------------------------------------------------------
     logger.info("_nobs_", train=train_df.shape[0])
     logger.info("_nobs_", valid=valid_df.shape[0])
     logger.info("_nobs_", test=test_df.shape[0])
 
-    train_data = MessagesDataset(
-        messages=train_df["text"].to_list(),
-        labels=train_df["label"].to_list(),
-        label_map=label_map,
-    )
-    valid_data = MessagesDataset(
-        messages=valid_df["text"].to_list(),
-        labels=valid_df["label"].to_list(),
-        label_map=label_map,
-    )
-    test_data = MessagesDataset(
-        messages=test_df["text"].to_list(),
-        labels=test_df["label"].to_list(),
-        label_map=label_map,
-    )
-
-    # -------------------------------------------------------------------
-    # HYPERPARAMETERS
-    # -------------------------------------------------------------------
     hp = get_hyperparameters_from_args(args)
     for k, v in hp.__dict__.items():
         logger.info("__hp__", **{k: v})
 
-    # -------------------------------------------------------------------
-    # HYPERPARAMETERS & TRAIN COMPONENTS
-    # -------------------------------------------------------------------
     model = Model(hyperparameters=hp)
     logger.info("_mdsz_", **model_size(model))
     optimizer = optim.AdamW(
@@ -163,6 +142,36 @@ def main(args: Namespace):
         verbose=False,
     )
     criterion = nn.CrossEntropyLoss()
+
+    # preprocess data
+    train_inputs = model.preprocess(train_df["text"].to_list())
+    valid_inputs = model.preprocess(valid_df["text"].to_list())
+    test_inputs = model.preprocess(test_df["text"].to_list())
+    train_targets = torch.tensor(
+        train_df["label"].map_dict(label_map).to_list(), dtype=torch.int64
+    )
+    valid_targets = torch.tensor(
+        valid_df["label"].map_dict(label_map).to_list(), dtype=torch.int64
+    )
+    test_targets = torch.tensor(
+        test_df["label"].map_dict(label_map).to_list(), dtype=torch.int64
+    )
+    # create datasets
+    train_data = InputsDataset(
+        input_ids=train_inputs["input_ids"],  # type: ignore
+        attention_mask=train_inputs["attention_mask"],  # type: ignore
+        targets=train_targets,
+    )
+    valid_data = InputsDataset(
+        input_ids=valid_inputs["input_ids"],  # type: ignore
+        attention_mask=valid_inputs["attention_mask"],  # type: ignore
+        targets=valid_targets,
+    )
+    test_data = InputsDataset(
+        input_ids=test_inputs["input_ids"],  # type: ignore
+        attention_mask=test_inputs["attention_mask"],  # type: ignore
+        targets=test_targets,
+    )
     train_dataloader = DataLoader(train_data, batch_size=hp.batch_size, shuffle=True)
     valid_dataloader = DataLoader(valid_data, batch_size=hp.batch_size, shuffle=True)
     test_dataloader = DataLoader(test_data, batch_size=hp.batch_size, shuffle=True)
@@ -181,7 +190,7 @@ def main(args: Namespace):
     # TRAINING LOOOP
     # -------------------------------------------------------------------
     metrics = Metrics()
-    best_metric_value, best_acc_value = float("inf"), 0
+    best_metric_value, best_alt_value = float("inf"), 0
     best_metric_value *= 1 if hp.best_metric == "loss" else -1
     best_epoch, best_state_dict = 0, model.state_dict()  # type: ignore
     es_counter = 0
@@ -193,63 +202,44 @@ def main(args: Namespace):
         # --------------------------------------------------------------
         # training steps
         # --------------------------------------------------------------
-        trn_epoch_loss, val_epoch_loss = [], []
+        trn_epoch_loss = []
         model.train()  # type: ignore
 
-        for i, (messages, targets) in enumerate(train_dataloader):
-            outputs = model(messages)  # type: ignore
-            loss = criterion(outputs, targets.long())
+        for i, data in enumerate(train_dataloader):
+            outputs = model(**data)
+            loss = criterion(outputs, data["targets"].long())
             loss.backward()
             optimizer.step()
             optimizer.zero_grad()
             trn_epoch_loss.append(loss.item())
             if i == hp.num_steps:
                 break
-
+        # calculate mean loss
+        trn_epoch_loss_stat = sum(trn_epoch_loss) / len(trn_epoch_loss)
         # --------------------------------------------------------------
         # validation steps
         # --------------------------------------------------------------
-        val_epoch_acc, val_epoch_f1 = [], []
-        val_epoch_pr, val_epoch_rc = [], []
-        model.eval()  # type: ignore
-        with torch.no_grad():
-            # calculate mean loss
-            trn_epoch_loss_stat = sum(trn_epoch_loss) / len(trn_epoch_loss)
-            for i, (vmessages, vtargets) in enumerate(valid_dataloader):
-                voutputs = model(vmessages)  # type: ignore
-                vloss = criterion(voutputs, vtargets.long())
-                val_epoch_loss.append(vloss.item())
-                fit_metrics = fit(voutputs, vtargets)
-                val_epoch_acc.append(fit_metrics.acc)
-                val_epoch_f1.append(fit_metrics.f1)
-                val_epoch_pr.append(fit_metrics.pr)
-                val_epoch_rc.append(fit_metrics.rc)
-                if i == hp.num_steps:
-                    break
-        # calculate means
-        val_denom = len(val_epoch_loss)
-        val_epoch_loss_stat = sum(val_epoch_loss) / val_denom
-        val_epoch_acc_stat = sum(val_epoch_acc) / val_denom
-        val_epoch_f1_stat = sum(val_epoch_f1) / val_denom
-        val_epoch_pr_stat = sum(val_epoch_pr) / val_denom
-        val_epoch_rc_stat = sum(val_epoch_rc) / val_denom
-        epoch_metrics = {
-            "loss": trn_epoch_loss_stat,
-            "val_loss": val_epoch_loss_stat,
-            "val_acc": val_epoch_acc_stat,
-            "val_f1": val_epoch_f1_stat,
-            "val_pr": val_epoch_pr_stat,
-            "val_rc": val_epoch_rc_stat,
-        }
+        epoch_metrics = evaluate(
+            model=model,
+            dataloader=valid_dataloader,
+            criterion=criterion,
+            train_loss=trn_epoch_loss_stat,
+        )
         metrics.append(epoch=epoch, metrics=epoch_metrics)
         log_metrics(epoch, epoch_lr, epoch_metrics, logger)
 
         # --------------------------------------------------------------
         # track best epoch
         # --------------------------------------------------------------
-        if val_epoch_loss_stat < best_metric_value:
-            best_metric_value = val_epoch_loss_stat
-            best_acc_value = val_epoch_acc_stat
+        if hp.best_metric == "loss" and epoch_metrics["val_loss"] < best_metric_value:
+            best_metric_value = epoch_metrics["val_loss"]
+            best_alt_value = epoch_metrics["val_acc"]
+            best_epoch = epoch
+            best_state_dict = model.state_dict()  # type: ignore
+            es_counter = 0
+        elif epoch_metrics["val_acc"] > best_metric_value:
+            best_metric_value = epoch_metrics["val_acc"]
+            best_alt_value = epoch_metrics["val_loss"]
             best_epoch = epoch
             best_state_dict = model.state_dict()  # type: ignore
             es_counter = 0
@@ -258,8 +248,10 @@ def main(args: Namespace):
             if es_counter >= hp.early_stopping_patience:
                 logger.info("__early_stopping__", es_counter=es_counter)
                 break
-
-        lr_scheduler.step(val_epoch_loss_stat)
+        if hp.best_metric == "loss":
+            lr_scheduler.step(epoch_metrics["val_loss"])
+        else:
+            lr_scheduler.step(epoch_metrics["val_acc"])
 
     # ------------------------------------------------------------------
     # training duration
@@ -279,7 +271,7 @@ def main(args: Namespace):
         _epoch=best_epoch,
         _metric=hp.best_metric,
         _value=f"{best_metric_value:.4f}",
-        acc=f"{best_acc_value:.4f}",
+        alt=f"{best_alt_value:.4f}",
     )
 
     # -------------------------------------------------------------------
@@ -295,15 +287,15 @@ def main(args: Namespace):
     if val_epoch_acc_stat > 0.2:
         with torch.no_grad():
             test_loss, acc, f1s, prs, rcs = [], [], [], [], []
-            for tmessages, ttargets in test_dataloader:
-                toutputs = model(tmessages)  # type: ignore
-                tloss = criterion(toutputs, ttargets.long())
-                fit_metrics = fit(toutputs, ttargets)
+            for data in test_dataloader:
+                outputs = model(**data)  # type: ignore
+                loss = criterion(outputs, data["targets"].long())
+                fit_metrics = fit(outputs, data["targets"])
                 acc.append(fit_metrics.acc)
                 f1s.append(fit_metrics.f1)
                 prs.append(fit_metrics.pr)
                 rcs.append(fit_metrics.rc)
-                test_loss.append(tloss.item())
+                test_loss.append(loss.item())
             denom = len(acc)
             tacc = sum(acc) / denom
             tf1 = sum(f1s) / denom

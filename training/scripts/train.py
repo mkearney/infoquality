@@ -204,7 +204,6 @@ def main(args: Namespace):
         # --------------------------------------------------------------
         trn_epoch_loss = []
         model.train()  # type: ignore
-
         for i, data in enumerate(train_dataloader):
             outputs = model(**data)
             loss = criterion(outputs, data["targets"].long())
@@ -214,7 +213,6 @@ def main(args: Namespace):
             trn_epoch_loss.append(loss.item())
             if i == hp.num_steps:
                 break
-        # calculate mean loss
         trn_epoch_loss_stat = sum(trn_epoch_loss) / len(trn_epoch_loss)
         # --------------------------------------------------------------
         # validation steps
@@ -227,9 +225,8 @@ def main(args: Namespace):
         )
         metrics.append(epoch=epoch, metrics=epoch_metrics)
         log_metrics(epoch, epoch_lr, epoch_metrics, logger)
-
         # --------------------------------------------------------------
-        # track best epoch
+        # track best metric
         # --------------------------------------------------------------
         if hp.best_metric == "loss" and epoch_metrics["val_loss"] < best_metric_value:
             best_metric_value = epoch_metrics["val_loss"]

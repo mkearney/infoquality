@@ -1,23 +1,37 @@
-[tool.poetry]
-name = "infoquality"
-version = "0.1.0"
-description = ""
-authors = ["kearneymw <mike.wayne.kearney@gmail.com>"]
-readme = "README.md"
-packages = [{include = "infoquality", from = "src"}]
-
-[tool.poetry.dependencies]
-python = "^3.9"
-pydantic = "^2.2.0"
-torch = "^2.0.1"
-transformers = "^4.31.0"
-structlog = "^23.1.0"
-
-
-[tool.poetry.group.dev.dependencies]
-pytest = "^7.4.0"
-pytest-cov = "^4.1.0"
-
 [build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "infoquality"
+version = "0.2.0"
+description = "Fine-tune transformer models to classify the quality of text"
+readme = "README.md"
+license = "MIT"
+authors = [{ name = "Michael W. Kearney" }]
+requires-python = ">=3.10"
+dependencies = [
+    "pydantic>=2.2",
+    "structlog>=23.1",
+    "torch>=2.1",
+    "transformers>=4.40",
+]
+
+[project.optional-dependencies]
+training = [
+    "datasets>=2.14",
+    "polars>=1.0",
+    "torchmetrics>=1.0",
+]
+dev = [
+    "pre-commit",
+    "pytest>=8",
+    "pytest-cov",
+    "ruff",
+]
+
+[project.urls]
+Repository = "https://github.com/mkearney/infoquality"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/infoquality"]

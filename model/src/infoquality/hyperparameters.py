@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel
 
 
@@ -7,26 +9,28 @@ class HyperParameters(BaseModel):
 
     ### Attributes
         - `batch_size`: batch size for training
-        - `best_metric`: metric to use for early stopping
+        - `best_metric`: metric for early stopping, "loss" or "acc"
         - `dropout`: dropout rate
         - `early_stopping_patience`: number of consecutive epochs without
             improving best mark
-        - `gamma`: discount factor
+        - `gamma`: factor the learning rate is multiplied by on plateau
         - `lr_patience`: patience for learning rate scheduler
         - `lr`: learning rate
         - `max_len`: maximum length of a sequence
         - `model`: model to use
         - `name`: model name
         - `num_classes`: number of classes
-        - `num_dims`: number of dimensions
+        - `num_dims`: hidden size override (0 = keep the pretrained size)
         - `num_epochs`: number of epochs
-        - `num_layers`: number of layers
-        - `num_steps`: number of steps
+        - `num_layers`: number of layers override (0 = keep pretrained)
+        - `num_steps`: maximum number of training batches per epoch
+            (0 = use the full training set every epoch)
+        - `seed`: random seed
         - `version`: model version
     """
 
     batch_size: int = 64
-    best_metric: str = "loss"
+    best_metric: Literal["loss", "acc"] = "loss"
     dropout: float = 0.2
     early_stopping_patience: int = 4
     gamma: float = 0.8
@@ -40,4 +44,5 @@ class HyperParameters(BaseModel):
     num_epochs: int = 32
     num_layers: int = 0
     num_steps: int = 8
+    seed: int = 42
     version: str = "0.1.0"

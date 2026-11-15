@@ -1,8 +1,6 @@
-import json
-from typing import Dict, List
-
 from pydantic import BaseModel
-from torchmetrics import Accuracy, F1Score, Precision, Recall
+from torch import Tensor
+from torchmetrics import Accuracy, F1Score, MetricCollection, Precision, Recall
 
 
 class FitStatistics(BaseModel):
@@ -10,10 +8,10 @@ class FitStatistics(BaseModel):
     Fit statistics.
 
     ### Attributes
-        - `acc`: accuracy
-        - `f1`: f1 score
-        - `pr`: precision
-        - `rc`: recall
+        - `acc`: accuracy (share of correct predictions)
+        - `f1`: macro-averaged F1 score
+        - `pr`: macro-averaged precision
+        - `rc`: macro-averaged recall (a.k.a. balanced accuracy)
     """
 
     acc: float
@@ -24,51 +22,54 @@ class FitStatistics(BaseModel):
 
 class Fit:
     """
-    Fit class.
+    Accumulates predictions over many batches and computes fit statistics over
+    all of them (averaging per-batch macro scores is biased).
 
     ### Args
         - `num_classes`: number of classes
-        - `task`: task type
-        - `average`: how to average the metrics, i.e., "micro" or "macro"
+        - `average`: how to average precision, recall, and F1, i.e., "micro"
+            or "macro". Accuracy is always the plain (micro) accuracy.
+
+    ### Example
+        fit = Fit(num_classes=2)
+        for batch in batches:
+            fit.update(model(**batch), batch["targets"])
+        stats = fit.compute()
     """
 
-    def __init__(
-        self,
-        num_classes: int,
-        task: str = "multiclass",
-        average: str = "macro",
-    ):
+    def __init__(self, num_classes: int, average: str = "macro"):
         self.num_classes = num_classes
         self.average = average
-        self.task = task
-        self.accuracy = Accuracy(
-            task=self.task,  # type: ignore
-            num_classes=num_classes,
-            average=self.average,  # type: ignore
-        )
-        self.f1_score = F1Score(
-            task=self.task,  # type: ignore
-            num_classes=num_classes,
-            average=self.average,  # type: ignore
-        )
-        self.precision = Precision(
-            task=self.task,  # type: ignore
-            num_classes=num_classes,
-            average=self.average,  # type: ignore
-        )
-        self.recall = Recall(
-            task=self.task,  # type: ignore
-            num_classes=num_classes,
-            average=self.average,  # type: ignore
+        kwargs = {"task": "multiclass", "num_classes": num_classes}
+        self.metrics = MetricCollection(
+            {
+                "acc": Accuracy(**kwargs, average="micro"),
+                "f1": F1Score(**kwargs, average=average),
+                "pr": Precision(**kwargs, average=average),
+                "rc": Recall(**kwargs, average=average),
+            }
         )
 
-    def __call__(self, output, target) -> FitStatistics:
-        return FitStatistics(
-            acc=self.accuracy(output, target),
-            f1=self.f1_score(output, target),
-            pr=self.precision(output, target),
-            rc=self.recall(output, target),
-        )
+    def to(self, device) -> "Fit":
+        self.metrics = self.metrics.to(device)
+        return self
+
+    def reset(self) -> None:
+        self.metrics.reset()
+
+    def update(self, output: Tensor, target: Tensor) -> None:
+        self.metrics.update(output, target)
+
+    def compute(self) -> FitStatistics:
+        return FitStatistics(**{k: v.item() for k, v in self.metrics.compute().items()})
+
+    def __call__(self, output: Tensor, target: Tensor) -> FitStatistics:
+        """Fit statistics for a single batch (does not accumulate)."""
+        self.reset()
+        self.update(output, target)
+        stats = self.compute()
+        self.reset()
+        return stats
 
 
 class EpochMetrics(BaseModel):
@@ -77,58 +78,37 @@ class EpochMetrics(BaseModel):
 
     ### Attributes
         - `epoch`: epoch number
+        - `lr`: learning rate used during the epoch
         - `loss`: training loss
         - `val_loss`: validation loss
         - `val_acc`: validation accuracy
         - `val_f1`: validation F1 score
+        - `val_pr`: validation precision
+        - `val_rc`: validation recall
     """
 
     epoch: int
+    lr: float
     loss: float
     val_loss: float
     val_acc: float
     val_f1: float
+    val_pr: float
+    val_rc: float
 
 
 class Metrics:
-    metrics: List[EpochMetrics] = []
+    """Collects `EpochMetrics` over the course of training."""
 
-    def collect(self) -> Dict[str, List[float]]:
+    def __init__(self) -> None:
+        self.metrics: list[EpochMetrics] = []
+
+    def append(self, epoch: int, lr: float, metrics: dict[str, float]) -> None:
+        self.metrics.append(EpochMetrics(epoch=epoch, lr=lr, **metrics))
+
+    def collect(self) -> dict[str, list[float]]:
+        """Metrics as a dict of columns, e.g. {"val_loss": [0.7, 0.6, ...]}."""
         return {
-            "epoch": self.epoch(),
-            "loss": self.loss(),
-            "val_loss": self.val_loss(),
-            "val_acc": self.val_acc(),
-            "val_f1": self.val_f1(),
+            field: [getattr(m, field) for m in self.metrics]
+            for field in EpochMetrics.model_fields
         }
-
-    def epoch(self) -> List[float]:
-        return [float(m.epoch) for m in self.metrics]
-
-    def loss(self) -> List[float]:
-        return [m.loss for m in self.metrics]
-
-    def val_loss(self) -> List[float]:
-        return [m.val_loss for m in self.metrics]
-
-    def val_acc(self) -> List[float]:
-        return [m.val_acc for m in self.metrics]
-
-    def val_f1(self) -> List[float]:
-        return [m.val_f1 for m in self.metrics]
-
-    def append(self, epoch: int, metrics: Dict[str, float]) -> None:
-        epoch_metrics = EpochMetrics(epoch=epoch, **metrics)
-        self.metrics.append(epoch_metrics)
-
-    def save(
-        self,
-        output_dir: str,
-        version: str = "",
-    ) -> str:
-        version = "" if version == "" else f"-{version}"
-        save_as = f"{output_dir}/metrics{version}.json"
-        data = self.collect()
-        with open(save_as, "w") as f:
-            json.dump(data, f, indent=2)
-        return save_as
